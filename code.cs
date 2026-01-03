@@ -84,6 +84,9 @@ function onOpen() {
   menu.addSubMenu(ui.createMenu("Guest")
     .addItem("Lookup Guest History", "menuGuestHistory"));
   
+  menu.addSeparator();
+  menu.addItem("➕ New Booking Entry", "menuNewBookingEntry");
+  
   menu.addSubMenu(ui.createMenu("Bulk Operations")
     .addItem("Generate Invoices for Selected Rows", "menuBulkGenerateInvoices")
     .addItem("Update Tax Rate for Selected Rows", "menuBulkUpdateTaxRate")
@@ -92,6 +95,7 @@ function onOpen() {
     .addItem("Refresh Old Row Styling", "menuRefreshOldRowStyling"));
   
   menu.addSeparator();
+  menu.addItem("🔍 Debug: Check Last 5 Rows", "menuDebugLastRows");
   menu.addItem("Setup/Repair Headers", "menuSetupOnce");
   menu.addItem("Manage Room Maintenance", "menuManageRoomMaintenance");
   
@@ -505,6 +509,27 @@ function menuGenerateInvoice() {
   SpreadsheetApp.getUi().alert("Invoice generated/reprinted.");
 }
 
+/**
+ * Generate invoice for a row during check-in (checkOutTime optional - uses checkInTime if available)
+ */
+function generateInvoiceForRowOnCheckIn_(sh, row, C) {
+  // Create a modified column map that uses checkInTime if checkOutTime doesn't exist
+  const C2 = Object.assign({}, C);
+  
+  // If checkOutTime column doesn't exist, use checkInTime instead
+  if (!C2.checkOutTime && C2.checkInTime) {
+    C2.checkOutTime = C2.checkInTime;
+    log_("Using checkInTime for invoice (checkOutTime not available)", { row });
+  } else if (!C2.checkOutTime) {
+    log_("Warning: Neither checkOutTime nor checkInTime available, invoice may fail", { row });
+    // Still try - the function will use nowEST_() as fallback
+    C2.checkOutTime = 1; // Dummy value to pass the check
+  }
+  
+  // Call the standard invoice generation function
+  generateInvoiceForRow_(sh, row, C2, true);
+}
+
 function generateInvoiceForRow_(sh, row, C, force) {
   if (!C.room || !C.guest || !C.amount || !C.nights || !C.taxRate || !C.invoiceNo || !C.invoiceStatus || !C.invoiceUrl || !C.checkOutTime) return;
 
@@ -660,7 +685,18 @@ function generateInvoiceForRow_(sh, row, C, force) {
   const pdf = Utilities.newBlob(html, "text/html").getAs("application/pdf").setName(fileName);
   const file = folderToday_().createFile(pdf);
 
-  sh.getRange(row, C.invoiceUrl).setValue(file.getUrl());
+  // Set file to be viewable by anyone with the link (for PDF viewing/printing)
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {
+    log_("Could not set file sharing permissions", { error: e.toString() });
+  }
+
+  // Use viewer URL for proper PDF display
+  const fileId = file.getId();
+  const fileUrl = `https://drive.google.com/file/d/${fileId}/view`;
+  
+  sh.getRange(row, C.invoiceUrl).setValue(fileUrl);
 
   // Email optional
   if (C.guestEmail) {
@@ -1852,6 +1888,43 @@ function menuBulkCheckout() {
   }
 }
 
+function menuDebugLastRows() {
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SHEET);
+    if (!sh) {
+      SpreadsheetApp.getUi().alert("Sheet not found: " + CFG.SHEET);
+      return;
+    }
+    
+    const C = cols_(sh);
+    const lastRow = sh.getLastRow();
+    const startRow = Math.max(1, lastRow - 4); // Last 5 rows
+    
+    let debugInfo = `Debug: Last 5 Rows in ${CFG.SHEET}\n\n`;
+    debugInfo += `Total Rows: ${lastRow}\n`;
+    debugInfo += `Checking Rows: ${startRow} to ${lastRow}\n\n`;
+    
+    for (let row = startRow; row <= lastRow; row++) {
+      const room = C.room ? sh.getRange(row, C.room).getValue() : "";
+      const guest = C.guest ? sh.getRange(row, C.guest).getValue() : "";
+      const date = C.date ? sh.getRange(row, C.date).getValue() : "";
+      const checkIn = C.checkIn ? sh.getRange(row, C.checkIn).getValue() : "";
+      const total = C.total ? sh.getRange(row, C.total).getValue() : "";
+      
+      debugInfo += `Row ${row}:\n`;
+      debugInfo += `  Room: ${room || "(empty)"}\n`;
+      debugInfo += `  Guest: ${guest || "(empty)"}\n`;
+      debugInfo += `  Date: ${date || "(empty)"}\n`;
+      debugInfo += `  CheckIn: ${checkIn || "(empty)"}\n`;
+      debugInfo += `  Total: ${total || "(empty)"}\n\n`;
+    }
+    
+    SpreadsheetApp.getUi().alert("Debug Info", debugInfo, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert("Error: " + error.toString());
+  }
+}
+
 function menuRefreshOldRowStyling() {
   try {
     const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SHEET);
@@ -2410,12 +2483,12 @@ function showUnifiedRoomDashboard_(dashboard) {
     .room-card.ready { border-left-color: #FFD700; background-color: #FFEB3B; }
     .room-card.ready-for-cleaning { border-left-color: #FFD700; background-color: #FFEB3B; }
     .room-card.cleaned { border-left-color: #D5E8D4; background-color: #E8F5E9; }
-    .room-card.cleaned---ready { border-left-color: #D5E8D4; background-color: #E8F5E9; }
-    .room-card.available { border-left-color: #C6EFCE; background-color: #E8F5E9; }
-    .room-card.maintenance { border-left-color: #D9D9D9; background-color: #F0F0F0; }
-    .room-card.out-of-order { border-left-color: #FF6B6B; background-color: #FFE0E0; }
-    .room-card.construction { border-left-color: #FFA500; background-color: #FFF4E0; }
-    .room-card.repair { border-left-color: #FF9800; background-color: #FFF3E0; }
+    .room-card.cleaned---ready { border-left-color: #8BC34A; background-color: #DCEDC8; }
+    .room-card.available { border-left-color: #4CAF50; background-color: #C8E6C9; }
+    .room-card.maintenance { border-left-color: #9E9E9E; background-color: #F5F5F5; }
+    .room-card.out-of-order { border-left-color: #E91E63; background-color: #FCE4EC; }
+    .room-card.construction { border-left-color: #FF9800; background-color: #FFF3E0; }
+    .room-card.repair { border-left-color: #FF5722; background-color: #FFE0B2; }
     .room-number { font-weight: bold; font-size: 16px; margin-bottom: 5px; }
     .room-status { font-size: 12px; color: #666; margin-bottom: 3px; }
     .room-guest { font-size: 11px; color: #999; }
@@ -2560,24 +2633,42 @@ function showUnifiedRoomDashboard_(dashboard) {
     
     html += `<div class="room-number">${roomDisplay}</div>`;
     html += `<div class="room-status">${room.status}</div>`;
-    if (room.details.expectedCheckOut && room.status === "Occupied") {
-      html += `<div class="room-guest" style="font-size:10px; color:#e74c3c; font-weight:bold;">Out: ${room.details.expectedCheckOut}</div>`;
+    
+    // Show guest name if available
+    if (room.details.guest) {
+      html += `<div class="room-guest" style="font-size:10px; font-weight:500;">${room.details.guest}</div>`;
     }
+    
+    // Show check-in time for occupied rooms
+    if (room.details.checkInTime && room.status === "Occupied") {
+      html += `<div class="room-guest" style="font-size:9px; color:#666;">In: ${room.details.checkInTime}</div>`;
+    }
+    
+    // Show checkout time for ready-for-cleaning rooms
+    if (room.details.checkOutTime && room.status === "Ready for Cleaning") {
+      html += `<div class="room-guest" style="font-size:9px; color:#666;">Out: ${room.details.checkOutTime}</div>`;
+    }
+    
+    // Show expected checkout for occupied rooms
+    if (room.details.expectedCheckOut && room.status === "Occupied") {
+      html += `<div class="room-guest" style="font-size:9px; color:#e74c3c; font-weight:bold;">Out: ${room.details.expectedCheckOut}</div>`;
+    }
+    
     html += `</div>`;
   });
   
   html += `</div>`;
   
-  // Legend - include all status types
+  // Legend - include all status types with more distinct colors
   html += `<div class="legend"><h3>Legend:</h3>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#C6EFCE;"></span>Available</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FFC7CE;"></span>Occupied</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FFEB3B;"></span>Ready for Cleaning</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#D5E8D4;"></span>Cleaned - Ready</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#D9D9D9;"></span>Maintenance</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FFE0E0;"></span>Out of Order</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FFF4E0;"></span>Construction</span>`;
-  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FFF3E0;"></span>Repair</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#4CAF50; border:1px solid #2E7D32;"></span>Available</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#F44336; border:1px solid #C62828;"></span>Occupied</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FFC107; border:1px solid #F57C00;"></span>Ready for Cleaning</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#8BC34A; border:1px solid #558B2F;"></span>Cleaned - Ready</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#9E9E9E; border:1px solid #616161;"></span>Maintenance</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#E91E63; border:1px solid #AD1457;"></span>Out of Order</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FF9800; border:1px solid #E65100;"></span>Construction</span>`;
+  html += `<span class="legend-item"><span class="legend-color" style="background-color:#FF5722; border:1px solid #BF360C;"></span>Repair</span>`;
   html += `</div>`;
   
   html += `</body></html>`;
@@ -2735,6 +2826,450 @@ function showPendingHousekeepingReport_(items) {
   
   const htmlOutput = HtmlService.createHtmlOutput(html).setWidth(900).setHeight(700);
   SpreadsheetApp.getUi().showModalDialog(htmlOutput, "Pending Housekeeping Report");
+}
+
+/* ===================== NEW BOOKING ENTRY FORM ===================== */
+function menuNewBookingEntry() {
+  try {
+    // Ensure modal is wide enough for 5 columns
+    const html = HtmlService.createHtmlOutputFromFile('NewBookingForm')
+      .setWidth(1200)
+      .setHeight(850)
+      .setTitle('New Booking Entry');
+    SpreadsheetApp.getUi().showModalDialog(html, 'New Booking Entry');
+  } catch (error) {
+    log_("Error opening booking form", { error: error.toString() });
+    SpreadsheetApp.getUi().alert("Error opening booking form: " + error.toString());
+  }
+}
+
+/**
+ * Get available rooms for the booking form dropdown
+ * @returns {Array} Array of room objects with number and status
+ */
+function getAvailableRoomsForForm_() {
+  return getAvailableRoomsForForm();
+}
+
+function getAvailableRoomsForForm() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const logSheet = ss.getSheetByName(CFG.SHEET);
+    const roomStatuses = getRoomStatusesFromMaster_(ss);
+    
+    if (!logSheet) return [];
+    
+    const C = cols_(logSheet);
+    const data = logSheet.getDataRange().getValues();
+    
+    // Get current room statuses from log
+    const roomStatus = {};
+    for (let i = 1; i < data.length; i++) {
+      const room = C.room ? data[i][C.room - 1] : "";
+      if (!room) continue;
+      
+      const checkIn = C.checkIn ? toYes_(data[i][C.checkIn - 1]) : false;
+      const checkOut = C.checkOut ? toYes_(data[i][C.checkOut - 1]) : false;
+      
+      if (checkIn && !checkOut) {
+        roomStatus[room] = "Occupied";
+      }
+    }
+    
+    // Build room list (101-160)
+    const rooms = [];
+    for (let r = 101; r <= 160; r++) {
+      const roomStr = r.toString();
+      const masterStatus = roomStatuses[roomStr];
+      const currentStatus = roomStatus[roomStr] || "Available";
+      
+      // Only show available rooms or rooms with maintenance status
+      if (!masterStatus || masterStatus === "Available") {
+        if (currentStatus === "Available") {
+          rooms.push({ number: roomStr, status: "Available" });
+        }
+      } else {
+        rooms.push({ number: roomStr, status: masterStatus });
+      }
+    }
+    
+    return rooms;
+  } catch (error) {
+    log_("Error getting available rooms", { error: error.toString() });
+    return [];
+  }
+}
+
+/**
+ * Get guest names for autocomplete (recent guests)
+ * @returns {Array} Array of guest names
+ */
+function getRecentGuests_() {
+  return getRecentGuests();
+}
+
+function getRecentGuests() {
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SHEET);
+    if (!sh) return [];
+    
+    const C = cols_(sh);
+    if (!C.guest) return [];
+    
+    const data = sh.getDataRange().getValues();
+    const guests = new Set();
+    
+    // Get last 50 rows for recent guests
+    const startRow = Math.max(1, data.length - 50);
+    for (let i = startRow; i < data.length; i++) {
+      const guest = data[i][C.guest - 1];
+      if (guest && guest.toString().trim()) {
+        guests.add(guest.toString().trim());
+      }
+    }
+    
+    return Array.from(guests).sort();
+  } catch (error) {
+    log_("Error getting recent guests", { error: error.toString() });
+    return [];
+  }
+}
+
+/**
+ * Calculate quote totals for the form
+ * @param {number} amount - Amount per night
+ * @param {number} nights - Number of nights
+ * @param {number} taxRate - Tax rate (as decimal, e.g., 0.13)
+ * @returns {Object} Object with subtotal and total
+ */
+function calculateBookingTotals_(amount, nights, taxRate) {
+  return calculateBookingTotals(amount, nights, taxRate);
+}
+
+function calculateBookingTotals(amount, nights, taxRate) {
+  try {
+    const nightsNum = Math.max(1, Math.floor(nights || 1));
+    const amountNum = parseFloat(amount) || 0;
+    const taxRateNum = parseFloat(taxRate) || CFG.DEFAULT_TAX_RATE;
+    
+    const subtotal = +(amountNum * nightsNum).toFixed(2);
+    const total = +(subtotal * (1 + taxRateNum)).toFixed(2);
+    
+    return {
+      subtotal: subtotal,
+      total: total,
+      nights: nightsNum
+    };
+  } catch (error) {
+    log_("Error calculating totals", { error: error.toString() });
+    return { subtotal: 0, total: 0, nights: 1 };
+  }
+}
+
+/**
+ * Save new booking entry to the sheet
+ * @param {Object} bookingData - Booking data from form
+ * @returns {Object} Result object with success status and message
+ */
+function saveNewBooking_(bookingData) {
+  return saveNewBooking(bookingData);
+}
+
+function saveNewBooking(bookingData) {
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SHEET);
+    if (!sh) {
+      return { success: false, message: "Sheet not found: " + CFG.SHEET };
+    }
+    
+    const C = cols_(sh);
+    if (!C.date || !C.room || !C.guest) {
+      return { success: false, message: "Required columns not found in sheet" };
+    }
+    
+    // Find the next truly empty row by checking key columns (Date, Room #, Guest)
+    // This avoids overwriting rows that have dropdowns/formulas but no actual data
+    const data = sh.getDataRange().getValues();
+    let newRow = 2; // Start checking from row 2 (row 1 is headers)
+    
+    // Scan from row 2 onwards to find the first row where Date, Room #, and Guest are all empty
+    for (let i = 1; i < data.length; i++) {
+      const rowNum = i + 1;
+      const dateVal = C.date ? (data[i][C.date - 1] || "").toString().trim() : "";
+      const roomVal = C.room ? (data[i][C.room - 1] || "").toString().trim() : "";
+      const guestVal = C.guest ? (data[i][C.guest - 1] || "").toString().trim() : "";
+      
+      // If all three key fields are empty, this is our next available row
+      if (!dateVal && !roomVal && !guestVal) {
+        newRow = rowNum;
+        break;
+      }
+    }
+    
+    // If we didn't find an empty row in existing data, use the row after the last row
+    if (newRow === 2 && data.length > 1) {
+      // Check if the last row has actual data
+      const lastRowIdx = data.length - 1;
+      const lastDateVal = C.date ? (data[lastRowIdx][C.date - 1] || "").toString().trim() : "";
+      const lastRoomVal = C.room ? (data[lastRowIdx][C.room - 1] || "").toString().trim() : "";
+      const lastGuestVal = C.guest ? (data[lastRowIdx][C.guest - 1] || "").toString().trim() : "";
+      
+      // If last row has data, add after it; otherwise use the last row
+      if (lastDateVal || lastRoomVal || lastGuestVal) {
+        newRow = data.length + 1;
+      } else {
+        newRow = data.length;
+      }
+    }
+    
+    // Safety check: ensure we're not before row 2
+    if (newRow < 2) {
+      newRow = 2;
+    }
+    
+    log_("Saving to new row", { 
+      newRow: newRow, 
+      sheet: CFG.SHEET,
+      sheetName: sh.getName(),
+      totalRowsInData: data.length,
+      note: "Found first empty row where Date, Room #, and Guest are all empty"
+    });
+    
+    // Prepare values
+    let date;
+    if (bookingData.date) {
+      // Handle date string format (YYYY-MM-DD)
+      const dateStr = bookingData.date;
+      if (dateStr.includes('-')) {
+        date = new Date(dateStr + 'T00:00:00');
+      } else {
+        date = new Date(bookingData.date);
+      }
+    } else {
+      date = nowEST_();
+    }
+    
+    const room = (bookingData.room || "").toString().trim();
+    const guest = (bookingData.guest || "").toString().trim();
+    
+    // Validate required fields
+    if (!room) {
+      return { success: false, message: "Room number is required" };
+    }
+    if (!guest) {
+      return { success: false, message: "Guest name is required" };
+    }
+    
+    const amount = parseFloat(bookingData.amount) || 0;
+    const nights = Math.max(1, Math.floor(parseFloat(bookingData.nights) || 1));
+    const taxRate = toTaxRate_(bookingData.taxRate);
+    
+    // Use total from form if provided, otherwise calculate
+    let total = 0;
+    let subtotal = 0;
+    
+    if (bookingData.total && parseFloat(bookingData.total) > 0) {
+      // User entered total directly - use it
+      total = parseFloat(bookingData.total);
+      subtotal = +(total / (1 + taxRate)).toFixed(2);
+    } else {
+      // Calculate from amount and nights
+      subtotal = +(amount * nights).toFixed(2);
+      total = +(subtotal * (1 + taxRate)).toFixed(2);
+    }
+    
+    // Set values directly to specific columns (more reliable than array approach)
+    // Set core booking data first
+    if (C.date) {
+      sh.getRange(newRow, C.date).setValue(date);
+    }
+    if (C.room) {
+      sh.getRange(newRow, C.room).setValue(room);
+    }
+    if (C.guest) {
+      sh.getRange(newRow, C.guest).setValue(guest);
+    }
+    if (C.amount) {
+      sh.getRange(newRow, C.amount).setValue(amount);
+    }
+    if (C.nights) {
+      sh.getRange(newRow, C.nights).setValue(nights);
+    }
+    if (C.taxRate) {
+      sh.getRange(newRow, C.taxRate).setValue(taxRate);
+    }
+    if (C.subtotal) {
+      sh.getRange(newRow, C.subtotal).setValue(subtotal);
+    }
+    if (C.total) {
+      sh.getRange(newRow, C.total).setValue(total);
+    }
+    
+    // Set optional fields
+    if (C.paymentType && bookingData.paymentType) {
+      sh.getRange(newRow, C.paymentType).setValue(bookingData.paymentType);
+    }
+    if (C.deskNotes && bookingData.deskNotes) {
+      sh.getRange(newRow, C.deskNotes).setValue(bookingData.deskNotes);
+    }
+    
+    // Flush to ensure data is written before other operations
+    SpreadsheetApp.flush();
+    
+    // Verify core data was written before proceeding
+    const verifyRoom = C.room ? sh.getRange(newRow, C.room).getValue() : "";
+    const verifyGuest = C.guest ? sh.getRange(newRow, C.guest).getValue() : "";
+    const verifyDate = C.date ? sh.getRange(newRow, C.date).getValue() : "";
+    
+    if (!verifyRoom || verifyRoom.toString().trim() !== room) {
+      log_("ERROR: Room not saved correctly", { expected: room, actual: verifyRoom, row: newRow });
+      return { success: false, message: `Failed to save room number. Expected: ${room}, Got: ${verifyRoom}` };
+    }
+    
+    if (!verifyGuest || verifyGuest.toString().trim() !== guest) {
+      log_("ERROR: Guest not saved correctly", { expected: guest, actual: verifyGuest, row: newRow });
+      return { success: false, message: `Failed to save guest name. Expected: ${guest}, Got: ${verifyGuest}` };
+    }
+    
+    log_("Core data verified", { room: verifyRoom, guest: verifyGuest, date: verifyDate, row: newRow });
+    
+    // Apply payment type styling if provided
+    if (C.paymentType && bookingData.paymentType) {
+      handlePaymentTypeChange_(sh, newRow, C, bookingData.paymentType);
+    }
+    
+    // Handle check-in if checked
+    if (bookingData.checkIn && C.checkIn) {
+      sh.getRange(newRow, C.checkIn).setValue("Yes");
+      if (C.checkInTime) {
+        sh.getRange(newRow, C.checkInTime).setValue(nowEST_());
+      }
+      sh.getRange(newRow, C.checkIn).setBackground(CFG.COLOR.CHECKIN_YES);
+      
+      // Clear old cleaned status and gray out old rows
+      if (room && C.hkStatus) {
+        clearOldCleanedStatus_(sh, room, newRow, C);
+      }
+      if (room) {
+        grayOutOldRows_(sh, room, newRow, C);
+      }
+      
+      // Generate invoice if requested
+      if (bookingData.printInvoice) {
+        try {
+          SpreadsheetApp.flush(); // Ensure all data is saved before generating invoice
+          updateQuoteForRow_(sh, newRow, C);
+          
+          // Check if required columns exist
+          if (!C.invoiceNo || !C.invoiceStatus || !C.invoiceUrl) {
+            log_("Missing invoice columns", { 
+              invoiceNo: C.invoiceNo, 
+              invoiceStatus: C.invoiceStatus, 
+              invoiceUrl: C.invoiceUrl 
+            });
+            // Try to repair headers
+            repairHeaders_(sh);
+            // Re-resolve columns after repair
+            const C2 = cols_(sh);
+            Object.assign(C, C2);
+          }
+          
+          // Generate invoice (checkOutTime is optional - will use checkInTime if not available)
+          generateInvoiceForRowOnCheckIn_(sh, newRow, C);
+          
+          // Verify invoice was created
+          const invoiceUrl = C.invoiceUrl ? sh.getRange(newRow, C.invoiceUrl).getValue() : "";
+          const invoiceNo = C.invoiceNo ? sh.getRange(newRow, C.invoiceNo).getValue() : "";
+          
+          if (invoiceUrl) {
+            log_("Invoice generated on check-in", { row: newRow, room: room, guest: guest, invoiceNo: invoiceNo });
+          } else {
+            log_("Warning: Invoice generation may have failed - no URL found", { row: newRow, invoiceNo: invoiceNo });
+          }
+        } catch (invoiceError) {
+          log_("Error generating invoice on check-in", { 
+            row: newRow, 
+            error: invoiceError.toString(),
+            stack: invoiceError.stack 
+          });
+          // Don't fail the entire save if invoice generation fails, but log it
+        }
+      }
+    }
+    
+    // Flush to ensure all values are written before calculations
+    SpreadsheetApp.flush();
+    
+    // Update quote calculations (this ensures consistency)
+    // Only update if we have the required values
+    if (amount > 0 && nights > 0) {
+      updateQuoteForRow_(sh, newRow, C);
+      SpreadsheetApp.flush();
+    }
+    
+    // Final verification - read back all key values
+    const finalRoom = C.room ? sh.getRange(newRow, C.room).getValue() : "";
+    const finalGuest = C.guest ? sh.getRange(newRow, C.guest).getValue() : "";
+    const finalAmount = C.amount ? sh.getRange(newRow, C.amount).getValue() : "";
+    const finalTotal = C.total ? sh.getRange(newRow, C.total).getValue() : "";
+    
+    log_("Final verification", { 
+      row: newRow, 
+      room: finalRoom, 
+      guest: finalGuest, 
+      amount: finalAmount, 
+      total: finalTotal,
+      sheetName: sh.getName()
+    });
+    
+    if (!finalRoom || finalRoom.toString().trim() !== room) {
+      log_("CRITICAL ERROR: Data lost after operations", { expected: room, actual: finalRoom, row: newRow });
+      return { success: false, message: `Data was lost after save. Row ${newRow} appears empty.` };
+    }
+    
+    // Select the new row so user can see it (if possible)
+    try {
+      sh.setActiveRange(sh.getRange(newRow, 1, 1, 1));
+      sh.getRange(newRow, C.room || 1).activate();
+    } catch (e) {
+      log_("Could not activate row", { row: newRow, error: e.toString() });
+    }
+    
+    // Build success message
+    let successMessage = `✅ Booking saved successfully!\n\nRow: ${newRow}\nRoom: ${room}\nGuest: ${guest}`;
+    if (bookingData.checkIn && bookingData.printInvoice) {
+      const invoiceNo = C.invoiceNo ? sh.getRange(newRow, C.invoiceNo).getValue() : "";
+      const invoiceUrl = C.invoiceUrl ? sh.getRange(newRow, C.invoiceUrl).getValue() : "";
+      if (invoiceUrl) {
+        successMessage += `\n\n🖨️ Invoice ${invoiceNo || ""} has been created!\nThe invoice will open in a new window for printing.`;
+      } else {
+        successMessage += `\n\n⚠️ Invoice generation attempted but may have failed. Please check manually or use "Generate/Reprint Invoice" menu.`;
+      }
+    }
+    successMessage += `\n\nPlease check row ${newRow} in the ${CFG.SHEET} sheet.`;
+    
+    // Get invoice URL if invoice was generated
+    let invoiceUrl = "";
+    let invoiceNo = "";
+    if (bookingData.checkIn && bookingData.printInvoice && C.invoiceUrl) {
+      invoiceUrl = sh.getRange(newRow, C.invoiceUrl).getValue() || "";
+      invoiceNo = C.invoiceNo ? sh.getRange(newRow, C.invoiceNo).getValue() : "";
+    }
+    
+    return { 
+      success: true, 
+      message: successMessage,
+      row: newRow,
+      room: room,
+      guest: guest,
+      invoiceGenerated: (bookingData.checkIn && bookingData.printInvoice) || false,
+      invoiceUrl: invoiceUrl,
+      invoiceNo: invoiceNo
+    };
+  } catch (error) {
+    log_("Error saving new booking", { error: error.toString(), stack: error.stack, bookingData: bookingData });
+    return { success: false, message: "Error saving booking: " + error.toString() };
+  }
 }
 
 /* ===================== LOGGING ===================== */

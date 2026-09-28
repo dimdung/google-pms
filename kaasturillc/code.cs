@@ -6,7 +6,7 @@
  * 3) CheckIn/CheckOut timestamps reliably stamp again
  * 4) Repairs missing headers (U/V blank titles issue)
  * 5) Adds menu: Kaasturi  → Generate/Reprint Invoice
- * 6) Optionally hides Duration and TempNote (instead of deleting)
+ * 6) Fixed column view: CFG.HIDDEN_COLUMNS (J, T→AC) stay hidden, everything else A→AD shown
  * 7) Housekeeping automation (HK Done timestamp, color coding)
  * 8) Payment Type handling and validation
  * 9) Daily/weekly reporting functions
@@ -22,7 +22,7 @@
  *     V  "Tax Amount"        dollar tax (Subtotal × Tax Rate)
  * 16) Column formats + dropdown validation applied by Setup
  * 17) Void / Email invoice menu actions, Invoice Status colouring
- * 18) Hotel-style invoice: stay dates, nightly breakdown, tax line
+ * 18) Hotel-style invoice (A5): stay dates, nightly breakdown, tax line, colour-coded Total Paid
  *********************************************************/
 
 const CFG = {
@@ -35,6 +35,7 @@ const CFG = {
     addr2: "Fairfax, VA 22030",
     phone: "571-407-5438",
     email: "kaasturillc@gmail.com",
+    website: "https://kaasturi.com/",
   },
 
   // 16% tax (0.16). Used for new rows, the booking form and invoices.
@@ -55,6 +56,7 @@ const CFG = {
     RATE_NAME: "Standard Rate",
     TAX_LABEL: "State and Transient Occupancy Tax",
     CURRENCY: "USD",
+    CURRENCY_SYMBOL: "$",       // amounts print as $87.61; currency code appears once in the footer
     FOOTER: "Receipt for lodging paid. Keep this document for your records.",
   },
 
@@ -139,9 +141,22 @@ const CFG = {
   // "Card" is included because the sheet already uses it (avoids red validation triangles)
   PAYMENT_TYPES: ["Cash", "Card", "Credit Card", "Debit Card", "Check", "Other"],
 
-  // Setup un-hides the auto-filled columns (Duration, Expected CheckOut, Tax Amount).
-  // Set to false if you prefer to keep them hidden.
-  SHOW_AUTO_COLUMNS: true,
+  // Columns kept hidden in the FrontDesk_Log view (all are auto-filled or invoice back-office
+  // fields). Setup/Repair hides exactly these and shows every other A→AD column, so the sheet
+  // always looks like: A–I, K–S, AD visible.
+  HIDDEN_COLUMNS: [
+    "Duration",             // J
+    "Expected CheckOut",    // T
+    "Tax Rate",             // U
+    "Tax Amount",           // V
+    "Guest Email",          // W
+    "Payment Processor",    // X
+    "Processor Receipt #",  // Y
+    "Card Last4",           // Z
+    "Auth Code",            // AA
+    "Invoice #",            // AB
+    "Invoice Status",       // AC
+  ],
   
   // Column constants
   OLD_DATA_END_COLUMN: 30, // Column AD - last column to gray out for old data
@@ -207,14 +222,35 @@ function setupOnce() {
   protectTimestampColumns_(sh);
   applySheetFormatting_(sh);
 
-  // Duration / Expected CheckOut / Tax Amount are auto-filled – show them unless disabled
-  if (CFG.SHOW_AUTO_COLUMNS) {
-    showIfExists_(sh, "Duration");
-    showIfExists_(sh, "Expected CheckOut");
-    showIfExists_(sh, "Tax Amount");
-  }
+  applyColumnVisibility_(sh);
 
-  SpreadsheetApp.getUi().alert("Setup complete (columns A→AD repaired, formats + dropdowns applied). Reload the sheet.");
+  SpreadsheetApp.getUi().alert("Setup complete (columns A→AD repaired, formats + dropdowns applied, hidden columns reset). Reload the sheet.");
+}
+
+/**
+ * Enforce the FrontDesk_Log column view: hide every header in CFG.HIDDEN_COLUMNS and
+ * show every other A→AD column. Header lookup is by name so column order doesn't matter.
+ */
+function applyColumnVisibility_(sh) {
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => (x || "").toString().trim());
+  const hidden = new Set(CFG.HIDDEN_COLUMNS);
+  const changes = { hidden: [], shown: [] };
+
+  headers.forEach((h, i) => {
+    const col = i + 1;
+    // A1 may hold the booking counter ("147") – it is still the Date column.
+    const name = (i === 0 && isDateCounterHeader_(h)) ? "Date" : h;
+    if (!name) return;
+    if (hidden.has(name)) {
+      sh.hideColumns(col);
+      changes.hidden.push(`${colLetter_(col)} ${name}`);
+    } else if (CFG.COLUMNS.includes(name)) {
+      sh.showColumns(col);
+      changes.shown.push(`${colLetter_(col)} ${name}`);
+    }
+  });
+
+  log_("Column visibility applied", changes);
 }
 
 function menuApplyFormatting() {
@@ -701,18 +737,6 @@ function protectTotalAfterCheckout_(sh, row, C) {
   }
 }
 
-function hideIfExists_(sh, headerName) {
-  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => (x || "").toString().trim());
-  const idx = headers.indexOf(headerName);
-  if (idx >= 0) sh.hideColumns(idx + 1);
-}
-
-function showIfExists_(sh, headerName) {
-  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => (x || "").toString().trim());
-  const idx = headers.indexOf(headerName);
-  if (idx >= 0) sh.showColumns(idx + 1);
-}
-
 /* ===================== ROW DEFAULTS (#, Date, Nights, Tax Rate) ===================== */
 /**
  * Fill the "boring" columns for a booking row so staff only type Room / Name / Amount:
@@ -1084,9 +1108,9 @@ function generateInvoiceForRowOnCheckIn_(sh, row, C) {
  * Build the invoice PDF for a row, save it to Drive, write the URL to the sheet
  * and (unless opts.skipAutoEmail) email it to the Guest Email column.
  *
- * Layout mirrors a hotel booking confirmation:
- *   header (motel) → Total price → Dates / Check-in / Reservation / Room type / Rate
- *   → "N nights stay" nightly breakdown → Taxes → Total price → Payment information
+ * Layout (single A5 page, hotel-style):
+ *   header (motel | INVOICE no. / date / status) → Billed to | Stay details
+ *   → itemised room-charge table → Subtotal / Tax / Total Paid (green, shown once) → Payment information
  *
  * @returns {{inv:string, url:string, pdf:Blob}|null}
  */
@@ -1168,113 +1192,184 @@ function generateInvoiceForRow_(sh, row, C, force, opts) {
   const paymentType = C.paymentType ? sh.getRange(row, C.paymentType).getValue() : "";
   const guestEmail = C.guestEmail ? (sh.getRange(row, C.guestEmail).getValue() || "").toString().trim() : "";
 
-  const cur = CFG.INVOICE.CURRENCY;
-  const money = n => `${Number(n).toFixed(2)} ${cur}`;
+  const sym = CFG.INVOICE.CURRENCY_SYMBOL || "$";
+  const money = n => `${sym}${Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
   const esc = s => (s === null || s === undefined ? "" : String(s))
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const kv = (k, v, extra) => `
-        <tr>
-          <td style="padding:4px 0; color:#333; font-weight:bold; vertical-align:top; white-space:nowrap;">${k}</td>
-          <td style="padding:4px 0; color:#333; text-align:right; vertical-align:top;">${v}${extra ? `<div style="font-size:8.5pt; color:#777; margin-top:1px;">${extra}</div>` : ""}</td>
-        </tr>`;
-  const hr = `<tr><td colspan="2" style="border-bottom:1px solid #e3e3e3; padding:0; height:1px;"></td></tr>`;
+  const pct = `${Math.round(taxRate * 10000) / 100}%`;
   const statusColor = status === "PAID" ? "#27ae60" : (status === "REFUNDED" ? "#e67e22" : "#7f8c8d");
+  const totalLabel = status === "REFUNDED" ? "Total Refunded" : "Total Paid";
   const motelName = esc(CFG.MOTEL.name.replace(/\s+/g, " ").trim());
 
   // Payment info: only show lines that have data (keeps the A5 page short)
   const payLines = [
-    ["Payment type", paymentType],
-    ["Payment processor", processor],
+    ["Payment method", paymentType],
+    ["Processor", processor],
     ["Receipt / transaction #", receipt],
-    ["Card", last4 ? "•••• " + last4 : ""],
-    ["Auth code", auth],
+    ["Card", last4 ? "•••• •••• •••• " + last4 : ""],
+    ["Authorization code", auth],
+    ["Paid on", fmt_(paidAt, "MMM d, yyyy h:mm a") + " EST"],
   ].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 
+  // Small uppercase section label, used for "Billed to", "Stay details", etc.
+  const label = t => `<div class="lbl">${t}</div>`;
+
+  /*
+   * Font face matches earlier billing invoices: Arial.
+   * Type scale (so sections don't all look the same size):
+   *   14pt  Total Paid amount (green)   11pt  Total Paid label / guest name
+   *   13pt  motel name / INVOICE title  10pt  stay details
+   *    8.5pt payment / subtotal-tax      7.5pt Description / Amount rows
+   *    7pt  Dates rows / footer          6.5pt Description/Dates/Amount headers
+   */
   const html = `
   <html><head><meta charset="utf-8">
   <style>
     @page { size: ${CFG.INVOICE.PAGE_SIZE}; margin: ${CFG.INVOICE.PAGE_MARGIN}; }
-    body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; color: #222; margin: 0; padding: 0; background: #fff; }
+    html, body { height: 100%; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 10pt; line-height: 1.35; color: #333;
+      margin: 0; padding: 0; background: #fff;
+    }
     table { width: 100%; border-collapse: collapse; }
-    .sec { margin-top: 8px; font-size: 10.5pt; font-weight: bold; color: #1a1a1a; }
-    .line td { padding: 2px 0; color: #555; }
-    .line td:first-child { padding-left: 10px; }
-    .line td:last-child { text-align: right; white-space: nowrap; }
+    td { vertical-align: top; }
+    .num { text-align: right; white-space: nowrap; }
+    .muted { color: #666; }
+    .lbl { font-size: 7pt; font-weight: bold; letter-spacing: 0.8px; text-transform: uppercase; color: #2c3e50; margin-bottom: 3px; }
+    .brand { font-size: 13pt; font-weight: bold; color: #2c3e50; }
+    .title { font-size: 13pt; font-weight: bold; letter-spacing: 1px; color: #2c3e50; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 7pt; font-weight: bold; letter-spacing: 0.5px; color: #fff; }
+    .meta td { font-size: 8pt; padding: 1px 0 1px 8px; }
+    /* Stay details: bold labels, smaller values (same scale as Description rows) */
+    .stay td { padding: 2px 0; }
+    .stay td.k { width: 78px; font-weight: bold; color: #2c3e50; font-size: 7.5pt; }
+    .stay td.v { font-weight: normal; color: #777; font-size: 7pt; }
+    .stay .tag { font-weight: bold; color: #2c3e50; font-size: 7.5pt; }
+    .stay td.v b { font-size: 7.5pt; color: #2c3e50; }
+    /* Description / Dates / Amount – smaller + lighter so they don't match Stay Details */
+    .items th { font-size: 6.5pt; font-weight: bold; letter-spacing: 0.6px; text-transform: uppercase; color: #999; text-align: left; padding: 3px 5px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; }
+    .items th.num { text-align: right; }
+    .items td { padding: 2px 5px; border-bottom: 1px solid #eef0f3; font-size: 7pt; font-weight: normal; color: #777; }
+    .items td.dates { font-size: 6.5pt; color: #999; }
+    .items td.num { font-size: 7pt; color: #777; }
+    .totals td { padding: 2px 5px; font-size: 8.5pt; color: #666; }
+    .totals .grand td { padding: 6px 5px; font-size: 11pt; font-weight: bold; color: #2c3e50; border-top: 2px solid #2c3e50; }
+    .totals .grand td.num { font-size: 14pt; color: ${statusColor}; }
+    .pay td { padding: 1px 8px 1px 0; font-size: 8.5pt; }
+    /* Page-bottom footer: stays at bottom even when Description is short */
+    .page { width: 100%; height: 100%; }
+    .page-body { vertical-align: top; }
+    .page-foot { vertical-align: bottom; height: 1px; }
+    .foot-note { text-align: center; font-size: 7pt; color: #666; line-height: 1.45; padding-top: 8px; }
+    .foot-contact {
+      text-align: center; font-size: 7pt; color: #666; line-height: 1.45;
+      padding-top: 6px; margin-top: 6px; border-top: 1px solid #ddd;
+    }
+    .foot-contact a { color: #666; text-decoration: none; }
   </style></head>
   <body>
+  <table class="page" cellpadding="0" cellspacing="0">
+  <tr><td class="page-body">
 
-    <!-- Motel header -->
-    <table style="margin-bottom:6px;">
+    <!-- Header: motel identity | invoice meta -->
+    <table>
       <tr>
-        <td style="width:30px; vertical-align:top;">
-          <div style="width:24px; height:24px; background:#1f3a68; color:#fff; font-weight:bold; font-size:12pt; text-align:center; line-height:24px; border-radius:3px;">${esc(CFG.MOTEL.name.trim().charAt(0))}</div>
+        <td style="width:40px; padding-top:1px;">
+          <table cellpadding="0" cellspacing="0" style="border-collapse:separate;">
+            <tr>
+              <td bgcolor="#2c3e50" style="width:32px; height:32px; background-color:#2c3e50; border:2px solid #1a252f; border-radius:5px; color:#ffffff; font-family:Arial, Helvetica, sans-serif; font-weight:bold; font-size:16pt; text-align:center; vertical-align:middle; line-height:32px;">
+                ${esc(CFG.MOTEL.name.trim().charAt(0))}
+              </td>
+            </tr>
+          </table>
         </td>
-        <td style="vertical-align:top;">
-          <div style="font-size:12.5pt; font-weight:bold; color:#1a1a1a;">${motelName}</div>
-          <div style="font-size:8.5pt; color:#555; margin-top:1px;">${esc(CFG.MOTEL.addr1)}, ${esc(CFG.MOTEL.addr2)}, United States</div>
-          <div style="font-size:8pt; color:#666; margin-top:1px;">Phone: ${esc(CFG.MOTEL.phone)} &nbsp;|&nbsp; ${esc(CFG.MOTEL.email)}</div>
+        <td style="padding-left:6px;">
+          <div class="brand">${motelName}</div>
+          <div class="muted" style="font-size:8pt; margin-top:2px;">${esc(CFG.MOTEL.addr1)}, ${esc(CFG.MOTEL.addr2)}</div>
         </td>
-        <td style="vertical-align:top; text-align:right; white-space:nowrap;">
-          <div style="font-size:11pt; font-weight:bold; color:#1a1a1a;">INVOICE</div>
-          <div style="font-size:8.5pt; color:#555; margin-top:1px;">${esc(inv)}</div>
-          <div style="display:inline-block; margin-top:3px; padding:1px 7px; border-radius:3px; background:${statusColor}; color:#fff; font-size:7.5pt; font-weight:bold;">${esc(status)}</div>
+        <td class="num">
+          <div class="title">INVOICE</div>
+          <table class="meta" style="width:auto; margin-left:auto; margin-top:4px;">
+            <tr><td class="muted">Invoice no.</td><td class="num" style="font-weight:bold; color:#2c3e50;">${esc(inv)}</td></tr>
+            <tr><td class="muted">Date</td><td class="num">${fmt_(paidAt, "MMM d, yyyy")}</td></tr>
+          </table>
+          <div class="badge" style="margin-top:5px; background:${statusColor};">${esc(status)}</div>
         </td>
       </tr>
     </table>
 
-    <!-- Guest / stay summary (like a booking confirmation) -->
-    <table style="border-top:1px solid #e3e3e3;">
-      ${kv("Total price", `<span style="font-size:12pt; font-weight:bold;">${money(total)}</span>`)}
-      ${hr}
-      ${kv("Guest", esc(guest || "-"), guestEmail ? esc(guestEmail) : "")}
-      ${hr}
-      ${kv("Dates", esc(datesLine), `Check in ${esc(checkInText)} &nbsp;·&nbsp; Check out ${esc(CFG.STAY.CHECKOUT_TEXT)}`)}
-      ${hr}
-      ${kv("Reservation", `1 room &nbsp;·&nbsp; Room ${esc(room)} &nbsp;·&nbsp; ${esc(roomType)}`)}
-      ${hr}
-      ${kv("Rate name", esc(CFG.INVOICE.RATE_NAME), `${money(rate)} per night`)}
-      ${hr}
-      ${kv("Invoice date", fmt_(paidAt, "MMM d, yyyy h:mm a") + " (EST)")}
-      ${hr}
-    </table>
+    <div style="height:2px; background:#2c3e50; margin:10px 0 10px 0;"></div>
 
-    <!-- Nightly breakdown -->
-    <div class="sec">${nights} ${nightsText} stay</div>
-    <table style="margin-top:2px;">
-      ${nightly.map(n => `<tr class="line"><td>${esc(n.label)}</td><td>${money(n.amount)}</td></tr>`).join("")}
+    <!-- Billed to | Stay details -->
+    <table>
       <tr>
-        <td style="padding:4px 0 2px 0; color:#333; font-weight:bold;">Room charges subtotal</td>
-        <td style="padding:4px 0 2px 0; color:#333; text-align:right; font-weight:bold;">${money(subtotal)}</td>
+        <td style="width:42%; padding-right:12px;">
+          ${label("Billed to")}
+          <div style="font-size:11pt; font-weight:bold; color:#2c3e50;">${esc(guest || "Guest")}</div>
+          ${guestEmail ? `<div class="muted" style="font-size:8pt; margin-top:1px;">${esc(guestEmail)}</div>` : ""}
+        </td>
+        <td>
+          ${label("Stay details")}
+          <table class="stay">
+            <tr><td class="k">Room</td><td class="v"><b>${esc(room)}</b> &nbsp;·&nbsp; ${esc(roomType)}</td></tr>
+            <tr><td class="k">Dates</td><td class="v">${esc(datesLine)}</td></tr>
+            <tr><td class="k">Check-in</td><td class="v">${esc(checkInText)} &nbsp;·&nbsp; <span class="tag">Check-out</span> ${esc(CFG.STAY.CHECKOUT_TEXT)}</td></tr>
+            <tr><td class="k">Rate</td><td class="v">${esc(CFG.INVOICE.RATE_NAME)} &nbsp;·&nbsp; ${money(rate)} / night</td></tr>
+          </table>
+        </td>
       </tr>
     </table>
 
-    <!-- Taxes -->
-    <div class="sec">Taxes</div>
-    <table style="margin-top:2px;">
-      <tr class="line"><td>${esc(CFG.INVOICE.TAX_LABEL)} (${Math.round(taxRate * 10000) / 100}%)</td><td>${money(tax)}</td></tr>
+    <!-- Itemised charges (smaller Description / Dates / Amount) -->
+    <table class="items" style="margin-top:12px;">
+      <tr>
+        <th>Description</th>
+        <th style="width:36%;">Dates</th>
+        <th class="num" style="width:22%;">Amount</th>
+      </tr>
+      ${nightly.map(n => `
+      <tr>
+        <td>Room ${esc(room)} &nbsp;·&nbsp; ${esc(CFG.INVOICE.RATE_NAME)}</td>
+        <td class="dates">${esc(n.label)}</td>
+        <td class="num">${money(n.amount)}</td>
+      </tr>`).join("")}
     </table>
 
-    <!-- Total -->
-    <table style="margin-top:8px; border-top:2px solid #1a1a1a; border-bottom:1px solid #e3e3e3;">
+    <!-- Totals (shown once) -->
+    <table style="margin-top:4px;">
       <tr>
-        <td style="padding:6px 0; font-size:12pt; font-weight:bold; color:#1a1a1a;">Total price</td>
-        <td style="padding:6px 0; font-size:12pt; font-weight:bold; color:#1a1a1a; text-align:right;">${money(total)}</td>
+        <td style="width:32%;"></td>
+        <td>
+          <table class="totals">
+            <tr><td class="muted">Subtotal (${nights} ${nightsText})</td><td class="num" style="color:#333;">${money(subtotal)}</td></tr>
+            <tr><td class="muted">${esc(CFG.INVOICE.TAX_LABEL)} (${pct})</td><td class="num" style="color:#333;">${money(tax)}</td></tr>
+            <tr class="grand"><td>${totalLabel}</td><td class="num">${money(total)}</td></tr>
+          </table>
+        </td>
       </tr>
     </table>
 
     <!-- Payment information -->
-    <div style="margin-top:8px; padding:6px 10px; background-color:#f5f7fa; border-left:3px solid #1f3a68;">
-      <div style="font-size:9pt; color:#333; margin-bottom:2px; font-weight:bold;">Payment information</div>
-      <table style="font-size:8.5pt;">
-        ${payLines.length ? payLines.map(([k, v]) =>
-          `<tr><td style="padding:1px 8px 1px 0; color:#666; width:130px;">${esc(k)}</td><td style="padding:1px 0; color:#333;">${esc(v)}</td></tr>`).join("")
-          : `<tr><td style="padding:1px 0; color:#666;">Payment on file</td></tr>`}
+    <div style="margin-top:12px; padding:8px 10px; background:#f8f9fa; border-left:4px solid #3498db;">
+      ${label("Payment information")}
+      <table class="pay">
+        ${payLines.map(([k, v]) =>
+          `<tr><td class="muted" style="width:150px;">${esc(k)}</td><td style="color:#333;">${esc(v)}</td></tr>`).join("")}
       </table>
     </div>
 
-    <div style="margin-top:10px; padding-top:6px; border-top:1px solid #e3e3e3; text-align:center; font-size:8pt; color:#7f8c8d;">
-      ${esc(CFG.INVOICE.FOOTER)} &nbsp;·&nbsp; Thank you for staying at ${motelName}.
+  </td></tr>
+  <tr><td class="page-foot">
+    <div class="foot-note">
+      ${esc(CFG.INVOICE.FOOTER)}<br>
+      All amounts in ${esc(CFG.INVOICE.CURRENCY)}. Thank you for staying at ${motelName}.
     </div>
+    <div class="foot-contact">
+      Phone: ${esc(CFG.MOTEL.phone)} &nbsp;|&nbsp; Email: ${esc(CFG.MOTEL.email)} &nbsp;|&nbsp; Website: <a href="${esc(CFG.MOTEL.website)}">${esc(CFG.MOTEL.website)}</a>
+    </div>
+  </td></tr>
+  </table>
   </body></html>`;
 
   const fileName = `${inv}_${room}_${safeName_(guest)}_${fmt_(paidAt,"yyyyMMdd_HHmmss")}.pdf`;

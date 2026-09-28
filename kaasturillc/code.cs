@@ -15,6 +15,14 @@
  * 12) Bulk operations menu items
  * 13) Enhanced error handling and logging
  * 14) Data validation improvements
+ * 15) Fixed A→AD column layout (CFG.COLUMNS) – every column is used:
+ *     B  "#"                 auto booking sequence
+ *     J  "Duration"          actual stay length stamped at checkout
+ *     T  "Expected CheckOut" Date/CheckInTime + nights @ 11:00 AM
+ *     V  "Tax Amount"        dollar tax (Subtotal × Tax Rate)
+ * 16) Column formats + dropdown validation applied by Setup
+ * 17) Void / Email invoice menu actions, Invoice Status colouring
+ * 18) Hotel-style invoice: stay dates, nightly breakdown, tax line
  *********************************************************/
 
 const CFG = {
@@ -29,7 +37,85 @@ const CFG = {
     email: "kaasturillc@gmail.com",
   },
 
+  // 16% tax (0.16). Used for new rows, the booking form and invoices.
   DEFAULT_TAX_RATE: 0.16,
+
+  // Standard stay times (used for Expected CheckOut + invoice)
+  STAY: {
+    CHECKIN_TEXT: "3:00 PM",
+    CHECKOUT_HOUR: 11,          // 11:00 AM
+    CHECKOUT_TEXT: "11:00 AM",
+  },
+
+  // Invoice wording (mirrors a hotel booking confirmation)
+  INVOICE: {
+    PAGE_SIZE: "A5",            // PDF paper size (A5 = 148 × 210 mm). Use "A4" / "letter" if needed.
+    PAGE_MARGIN: "8mm",
+    MAX_NIGHT_LINES: 8,         // longer stays are collapsed to one line so the page stays A5
+    RATE_NAME: "Standard Rate",
+    TAX_LABEL: "State and Transient Occupancy Tax",
+    CURRENCY: "USD",
+    FOOTER: "Receipt for lodging paid. Keep this document for your records.",
+  },
+
+  // Canonical FrontDesk_Log layout, column A → AD (30 columns).
+  // Header lookup is still name-based, so existing sheets keep working;
+  // Setup/Repair fills blanks and renames known aliases into this layout.
+  COLUMNS: [
+    "Date",                 // A
+    "#",                    // B  booking sequence
+    "Room #",               // C
+    "Full Name",            // D
+    "Amount",               // E  per-night rate
+    "Number of Night(s)",   // F
+    "Subtotal",             // G
+    "Total With Tax",       // H
+    "Payment Type",         // I
+    "Duration",             // J  actual stay length (auto)
+    "CheckIn",              // K
+    "CheckInTime",          // L
+    "CheckOut",             // M
+    "CheckOutTime",         // N
+    "HK Status",            // O
+    "HK Done",              // P
+    "CleanedTime",          // Q
+    "Desk Notes",           // R
+    "HK Notes",             // S
+    "Expected CheckOut",    // T  (was TempNote)
+    "Tax Rate",             // U
+    "Tax Amount",           // V  (was blank)
+    "Guest Email",          // W
+    "Payment Processor",    // X
+    "Processor Receipt #",  // Y
+    "Card Last4",           // Z
+    "Auth Code",            // AA
+    "Invoice #",            // AB
+    "Invoice Status",       // AC
+    "Invoice PDF URL",      // AD
+  ],
+
+  // Old header names → canonical header names (renamed by Setup/Repair)
+  HEADER_ALIASES: {
+    "Quoted Nights": "Number of Night(s)",
+    "Nights": "Number of Night(s)",
+    "Name": "Full Name",
+    "Guest": "Full Name",
+    "Room": "Room #",
+    "Checkin": "CheckIn",
+    "Check In": "CheckIn",
+    "Checkout": "CheckOut",
+    "Check Out": "CheckOut",
+    "TempNote": "Expected CheckOut",
+    "Temp Note": "Expected CheckOut",
+    "VOID": "Invoice Status",
+    "Tax": "Tax Amount",
+    "Invoice URL": "Invoice PDF URL",
+    "Receipt #": "Processor Receipt #",
+    "Last4": "Card Last4",
+  },
+
+  INVOICE_STATUSES: ["PAID", "PENDING", "VOID", "REFUNDED"],
+  YES_NO: ["Yes", "No"],
 
   COLOR: {
     CHECKIN_YES: "#C6EFCE",        // Light green
@@ -50,10 +136,15 @@ const CFG = {
   HK_READY_TEXT: "Ready for Cleaning",
   HK_DONE_TEXT: "Cleaned - ReadyFor Rent",
   
-  PAYMENT_TYPES: ["Cash", "Credit Card", "Debit Card", "Check", "Other"],
+  // "Card" is included because the sheet already uses it (avoids red validation triangles)
+  PAYMENT_TYPES: ["Cash", "Card", "Credit Card", "Debit Card", "Check", "Other"],
+
+  // Setup un-hides the auto-filled columns (Duration, Expected CheckOut, Tax Amount).
+  // Set to false if you prefer to keep them hidden.
+  SHOW_AUTO_COLUMNS: true,
   
   // Column constants
-  OLD_DATA_END_COLUMN: 18, // Column R - last column to gray out for old data
+  OLD_DATA_END_COLUMN: 30, // Column AD - last column to gray out for old data
   
   LOG_ENABLED: true,
 };
@@ -64,6 +155,8 @@ function onOpen() {
   const menu = ui.createMenu("Kaasturi ");
   
   menu.addItem("Generate/Reprint Invoice (Selected Row)", "menuGenerateInvoice");
+  menu.addItem("Email Invoice to Guest (Selected Row)", "menuEmailInvoice");
+  menu.addItem("Void Invoice (Selected Row)", "menuVoidInvoice");
   menu.addSeparator();
   
   menu.addSubMenu(ui.createMenu("Reports")
@@ -96,7 +189,9 @@ function onOpen() {
   
   menu.addSeparator();
   menu.addItem("🔍 Debug: Check Last 5 Rows", "menuDebugLastRows");
-  menu.addItem("Setup/Repair Headers", "menuSetupOnce");
+  menu.addItem("Setup/Repair Headers (A→AD)", "menuSetupOnce");
+  menu.addItem("Apply Column Formats & Dropdowns", "menuApplyFormatting");
+  menu.addItem("Recalculate Selected Rows (Tax/Totals/Expected CheckOut)", "menuRecalculateRows");
   menu.addItem("Manage Room Maintenance", "menuManageRoomMaintenance");
   
   menu.addToUi();
@@ -110,12 +205,125 @@ function setupOnce() {
   repairHeaders_(sh);
   createInstallableOnEditTrigger_();
   protectTimestampColumns_(sh);
+  applySheetFormatting_(sh);
 
-  // Optional: hide columns you don't want staff using
-  hideIfExists_(sh, "Duration");
-  hideIfExists_(sh, "TempNote");
+  // Duration / Expected CheckOut / Tax Amount are auto-filled – show them unless disabled
+  if (CFG.SHOW_AUTO_COLUMNS) {
+    showIfExists_(sh, "Duration");
+    showIfExists_(sh, "Expected CheckOut");
+    showIfExists_(sh, "Tax Amount");
+  }
 
-  SpreadsheetApp.getUi().alert("Setup complete. Reload the sheet.");
+  SpreadsheetApp.getUi().alert("Setup complete (columns A→AD repaired, formats + dropdowns applied). Reload the sheet.");
+}
+
+function menuApplyFormatting() {
+  try {
+    const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SHEET);
+    if (!sh) throw new Error(`Sheet not found: ${CFG.SHEET}`);
+    repairHeaders_(sh);
+    applySheetFormatting_(sh);
+    SpreadsheetApp.getUi().alert("Column formats and dropdown validations applied.");
+  } catch (error) {
+    log_("Error in menuApplyFormatting", { error: error.toString() });
+    SpreadsheetApp.getUi().alert("Error: " + error.toString());
+  }
+}
+
+/**
+ * Number formats, header styling, freeze row and dropdown validation for A→AD.
+ * Safe to re-run; only touches columns that exist (by header name).
+ */
+function applySheetFormatting_(sh) {
+  const C = cols_(sh);
+  const maxRows = Math.max(sh.getMaxRows(), 2);
+  const dataRows = maxRows - 1;
+  const lastCol = Math.max(sh.getLastColumn(), CFG.COLUMNS.length);
+
+  // Header row
+  sh.setFrozenRows(1);
+  sh.getRange(1, 1, 1, lastCol)
+    .setFontWeight("bold")
+    .setBackground("#2c3e50")
+    .setFontColor("#ffffff")
+    .setWrap(true)
+    .setVerticalAlignment("middle");
+
+  const fmtCol = (col, format) => {
+    if (col) sh.getRange(2, col, dataRows, 1).setNumberFormat(format);
+  };
+  const listRule = (values, allowInvalid) => SpreadsheetApp.newDataValidation()
+    .requireValueInList(values, true)
+    .setAllowInvalid(allowInvalid !== false)
+    .build();
+  const setRule = (col, rule) => {
+    if (col) sh.getRange(2, col, dataRows, 1).setDataValidation(rule);
+  };
+
+  // Dates & timestamps
+  fmtCol(C.date, "MM/dd/yyyy");
+  fmtCol(C.checkInTime, "MM/dd/yyyy hh:mm AM/PM");
+  fmtCol(C.checkOutTime, "MM/dd/yyyy hh:mm AM/PM");
+  fmtCol(C.cleanedTime, "MM/dd/yyyy hh:mm AM/PM");
+  fmtCol(C.expectedCheckOut, "MM/dd/yyyy hh:mm AM/PM");
+
+  // Money / numbers
+  fmtCol(C.amount, "$#,##0.00");
+  fmtCol(C.subtotal, "$#,##0.00");
+  fmtCol(C.total, "$#,##0.00");
+  fmtCol(C.taxAmount, "$#,##0.00");
+  fmtCol(C.taxRate, "0.00%");
+  fmtCol(C.nights, "0");
+  fmtCol(C.seq, "0");
+  fmtCol(C.last4, "@");           // keep leading zeros
+  fmtCol(C.room, "@");
+
+  // Dropdowns
+  setRule(C.paymentType, listRule(CFG.PAYMENT_TYPES, true));
+  setRule(C.checkIn, listRule(CFG.YES_NO, true));
+  setRule(C.checkOut, listRule(CFG.YES_NO, true));
+  setRule(C.hkDone, listRule(CFG.YES_NO, true));
+  setRule(C.invoiceStatus, listRule(CFG.INVOICE_STATUSES, true));
+  setRule(C.hkStatus, listRule([CFG.HK_READY_TEXT, CFG.HK_DONE_TEXT], true));
+
+  if (C.guestEmail) {
+    setRule(C.guestEmail, SpreadsheetApp.newDataValidation()
+      .requireTextIsEmail()
+      .setAllowInvalid(true)
+      .setHelpText("Enter a valid email address to send the invoice PDF automatically.")
+      .build());
+  }
+  if (C.last4) {
+    setRule(C.last4, SpreadsheetApp.newDataValidation()
+      .requireFormulaSatisfied(`=OR(ISBLANK(${colLetter_(C.last4)}2),REGEXMATCH(TO_TEXT(${colLetter_(C.last4)}2),"^\\d{4}$"))`)
+      .setAllowInvalid(true)
+      .setHelpText("Last 4 digits of the card only.")
+      .build());
+  }
+
+  // Sensible widths for the notes/URL columns
+  if (C.deskNotes) sh.setColumnWidth(C.deskNotes, 220);
+  if (C.hkNotes) sh.setColumnWidth(C.hkNotes, 180);
+  if (C.invoiceUrl) sh.setColumnWidth(C.invoiceUrl, 260);
+
+  log_("Sheet formatting applied", { columns: Object.keys(C).filter(k => C[k]).length });
+}
+
+/** True when a header cell holds a number (booking counter) rather than a title, e.g. "147". */
+function isDateCounterHeader_(h) {
+  const s = (h === null || h === undefined) ? "" : String(h).trim();
+  return /^\d+(\.\d+)?$/.test(s);
+}
+
+function colLetter_(col) {
+  let s = "";
+  let n = col;
+  while (n > 0) {
+    const m = (n - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
 /* ===================== TRIGGERS ===================== */
@@ -139,10 +347,10 @@ function handleEdit(e) {
     if (sh.getName() !== CFG.SHEET) return;
 
     const row = e.range.getRow();
-    if (row < 2) return;
 
-    // Always keep headers healthy (handles your "U/V blank title" issue)
-    if (row === 1) repairHeaders_(sh);
+    // Always keep headers healthy (handles the "U/V blank title" issue)
+    if (row === 1) { repairHeaders_(sh); return; }
+    if (row < 2) return;
 
     const col = e.range.getColumn();
     const v = (e.value || "").toString().trim();
@@ -151,10 +359,19 @@ function handleEdit(e) {
     // Resolve columns by header (robust even if columns shift)
     const C = cols_(sh);
 
+    // New booking typed directly into the sheet: fill defaults (#, Date, Nights, Tax Rate 16%)
+    if (col === C.room && v) {
+      fillRowDefaults_(sh, row, C);
+      updateQuoteForRow_(sh, row, C);
+    }
+
     // If Total With Tax is entered directly, calculate backwards (flat amount mode)
     if (col === C.total && v && !isNaN(toNumber_(v))) {
-      updateQuoteFromTotal_(sh, row, C, toNumber_(v));
-      return;
+      const isCheckedOut = C.checkOut ? toYes_(sh.getRange(row, C.checkOut).getValue()) : false;
+      if (!isCheckedOut) {
+        updateQuoteFromTotal_(sh, row, C, toNumber_(v));
+        return;
+      }
     }
 
     // Update quote totals when Amount / Nights / Tax changes
@@ -162,9 +379,35 @@ function handleEdit(e) {
       updateQuoteForRow_(sh, row, C);
     }
 
+    // Expected CheckOut follows Date / Nights
+    if ([C.date, C.nights].includes(col)) {
+      updateExpectedCheckOut_(sh, row, C);
+    }
+
     // Payment Type handling
     if (col === C.paymentType && v) {
       handlePaymentTypeChange_(sh, row, C, v);
+    }
+
+    // Invoice Status handling (PAID / VOID / REFUNDED colouring + unlock on VOID)
+    if (col === C.invoiceStatus) {
+      handleInvoiceStatusChange_(sh, row, C, v);
+      return;
+    }
+
+    // Light validation for Guest Email / Card Last4
+    if (col === C.guestEmail && v && !isValidEmail_(v)) {
+      sh.getRange(row, col).setNote("⚠ This does not look like a valid email address.").setBackground("#FCE4EC");
+    } else if (col === C.guestEmail) {
+      sh.getRange(row, col).clearNote().setBackground(null);
+    }
+    if (col === C.last4 && v) {
+      const digits = v.replace(/\D/g, "");
+      if (digits.length !== 4) {
+        sh.getRange(row, col).setNote("⚠ Enter only the last 4 digits of the card.").setBackground("#FCE4EC");
+      } else {
+        sh.getRange(row, col).setValue(digits).clearNote().setBackground(null);
+      }
     }
 
     // CheckIn timestamp
@@ -173,7 +416,9 @@ function handleEdit(e) {
         sh.getRange(row, C.checkInTime).setValue(nowEST_());
       }
       sh.getRange(row, C.checkIn).setBackground(CFG.COLOR.CHECKIN_YES);
+      fillRowDefaults_(sh, row, C);
       updateQuoteForRow_(sh, row, C);
+      updateExpectedCheckOut_(sh, row, C);
       
       // Clear "Cleaned - ReadyFor Rent" status from older rows for the same room
       // since the room is now occupied by a new guest
@@ -204,6 +449,7 @@ function handleEdit(e) {
     }
 
     updateQuoteForRow_(sh, row, C);
+    updateDuration_(sh, row, C);
     generateInvoiceForRow_(sh, row, C, false);
     
     // Protect Total With Tax column (H column) after checkout
@@ -261,6 +507,7 @@ function cols_(sh) {
   // Required headers (we will auto-create/repair these)
   const map = {
     date: "Date",
+    seq: "#",
     room: "Room #",
     guest: "Full Name",
     amount: "Amount",
@@ -268,6 +515,7 @@ function cols_(sh) {
     subtotal: "Subtotal",
     total: "Total With Tax",
     paymentType: "Payment Type",
+    duration: "Duration",
     checkIn: "CheckIn",
     checkInTime: "CheckInTime",
     checkOut: "CheckOut",
@@ -277,7 +525,9 @@ function cols_(sh) {
     cleanedTime: "CleanedTime",
     deskNotes: "Desk Notes",
     hkNotes: "HK Notes",
+    expectedCheckOut: "Expected CheckOut",
     taxRate: "Tax Rate",
+    taxAmount: "Tax Amount",
     guestEmail: "Guest Email",
     processor: "Payment Processor",
     receipt: "Processor Receipt #",
@@ -290,6 +540,10 @@ function cols_(sh) {
 
   const headerRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => (h || "").toString().trim());
 
+  // Column A is always the Date column. Its header cell may hold a booking counter
+  // (e.g. "147" or =COUNTA(...)) instead of the word "Date" – treat it as Date anyway.
+  if (isDateCounterHeader_(headerRow[0]) && !headerRow.includes("Date")) headerRow[0] = "Date";
+
   const idx = {};
   for (const [k, name] of Object.entries(map)) {
     // Try exact match first
@@ -300,13 +554,11 @@ function cols_(sh) {
       i = headerRow.findIndex(h => h.toLowerCase() === name.toLowerCase());
     }
     
-    // Special handling for CheckOut/Checkout variations
-    if (i < 0 && (k === "checkOut" || k === "checkIn")) {
-      const variations = k === "checkOut" 
-        ? ["Checkout", "checkout", "Check Out", "check out"]
-        : ["Checkin", "checkin", "Check In", "check in"];
-      for (const variant of variations) {
-        i = headerRow.findIndex(h => h.toLowerCase() === variant.toLowerCase());
+    // Known aliases (Checkout, Check In, TempNote, VOID, ...)
+    if (i < 0) {
+      const aliases = Object.keys(CFG.HEADER_ALIASES).filter(a => CFG.HEADER_ALIASES[a] === name);
+      for (const alias of aliases) {
+        i = headerRow.findIndex(h => h.toLowerCase() === alias.toLowerCase());
         if (i >= 0) break;
       }
     }
@@ -318,57 +570,75 @@ function cols_(sh) {
 }
 
 /* ===================== HEADER REPAIR ===================== */
+/**
+ * Bring the header row in line with CFG.COLUMNS (A→AD) without moving data:
+ *  1) Rename known aliases (Quoted Nights → Number of Night(s), TempNote → Expected CheckOut, VOID → Invoice Status, ...)
+ *  2) Fill blank header cells at their canonical position (e.g. V → "Tax Amount")
+ *  3) Any canonical header still missing is placed in the first blank cell (or appended)
+ * Header cells that already contain a different, unknown title are left untouched and logged.
+ */
 function repairHeaders_(sh) {
-  // Fix common broken state:
-  // - Quoted Nights should be renamed to Number of Night(s)
-  // - Some columns may be blank (U/V "no title" issue)
-  // - Ensure required headers exist; do not move columns here
-
-  const lastCol = sh.getLastColumn();
-  const headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
-
-  // Rename "Quoted Nights" -> "Number of Night(s)"
-  for (let c = 1; c <= lastCol; c++) {
-    const h = (headers[c-1] || "").toString().trim();
-    if (h === "Quoted Nights") sh.getRange(1, c).setValue("Number of Night(s)");
+  const wanted = CFG.COLUMNS;
+  const lastCol = Math.max(sh.getLastColumn(), wanted.length);
+  if (sh.getMaxColumns() < wanted.length) {
+    sh.insertColumnsAfter(sh.getMaxColumns(), wanted.length - sh.getMaxColumns());
   }
 
-  // If there are blank headers, try to set them based on nearby known structure
-  // At minimum, ensure Tax Rate / Guest Email / Payment Processor / Receipt exist.
-  const required = ["Tax Rate", "Guest Email", "Payment Processor", "Processor Receipt #", "Invoice #", "Invoice Status", "Invoice PDF URL", "Payment Type", "HK Done", "CleanedTime"];
-  const headerStrings = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(x => (x || "").toString().trim());
+  const read = () => sh.getRange(1, 1, 1, lastCol).getValues()[0].map(x => (x || "").toString().trim());
+  let headers = read();
+  const changes = [];
 
-  // Helper function to add missing headers
-  let refreshed = headerStrings.slice();
-  const missingHeaders = [];
-  
-  if (!refreshed.includes("Tax Rate")) missingHeaders.push("Tax Rate");
-  if (!refreshed.includes("Guest Email")) missingHeaders.push("Guest Email");
-  if (!refreshed.includes("Payment Type")) missingHeaders.push("Payment Type");
-  if (!refreshed.includes("HK Done")) missingHeaders.push("HK Done");
-  if (!refreshed.includes("CleanedTime")) missingHeaders.push("CleanedTime");
-  
-  for (const header of missingHeaders) {
-    const blank = refreshed.findIndex(x => x === "");
-    if (blank >= 0) {
-      sh.getRange(1, blank + 1).setValue(header);
-      refreshed[blank] = header;
+  // 0) Column A = Date. If A1 holds a booking counter ("147" / =COUNTA...), keep it and
+  //    just treat it as the Date header so "Date" is not created somewhere else.
+  if (isDateCounterHeader_(headers[0]) && !headers.includes("Date")) {
+    headers[0] = "Date";
+  }
+
+  // 1) Aliases → canonical names (only when the canonical name isn't already present)
+  headers.forEach((h, i) => {
+    if (!h) return;
+    const aliasKey = Object.keys(CFG.HEADER_ALIASES).find(a => a.toLowerCase() === h.toLowerCase());
+    if (!aliasKey) return;
+    const canonical = CFG.HEADER_ALIASES[aliasKey];
+    if (headers.includes(canonical)) return;
+    sh.getRange(1, i + 1).setValue(canonical);
+    headers[i] = canonical;
+    changes.push(`${colLetter_(i + 1)}: "${h}" → "${canonical}"`);
+  });
+
+  // 2) Blank cells at canonical positions
+  wanted.forEach((name, i) => {
+    if (headers.includes(name)) return;
+    if (i < headers.length && headers[i] === "") {
+      sh.getRange(1, i + 1).setValue(name);
+      headers[i] = name;
+      changes.push(`${colLetter_(i + 1)}: (blank) → "${name}"`);
     }
-  }
+  });
 
-  // Also fix missing "Invoice Status" header if your sheet used "VOID" column instead
-  const refreshed2 = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(x => (x || "").toString().trim());
-  if (refreshed2.includes("VOID") && !refreshed2.includes("Invoice Status")) {
-    // Rename VOID -> Invoice Status (matches the script)
-    const c = refreshed2.indexOf("VOID") + 1;
-    sh.getRange(1, c).setValue("Invoice Status");
-  }
+  // 3) Anything still missing → first blank cell, else append
+  wanted.forEach(name => {
+    if (headers.includes(name)) return;
+    let blank = headers.findIndex(h => h === "");
+    if (blank < 0) {
+      blank = headers.length;
+      headers.push("");
+      if (sh.getMaxColumns() < blank + 1) sh.insertColumnsAfter(sh.getMaxColumns(), 1);
+    }
+    sh.getRange(1, blank + 1).setValue(name);
+    headers[blank] = name;
+    changes.push(`${colLetter_(blank + 1)}: added "${name}"`);
+  });
 
-  // If your guest header is "Name" instead of "Full Name", rename it
-  const refreshed3 = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(x => (x || "").toString().trim());
-  if (refreshed3.includes("Name") && !refreshed3.includes("Full Name")) {
-    const c = refreshed3.indexOf("Name") + 1;
-    sh.getRange(1, c).setValue("Full Name");
+  // Report unknown titles inside A→AD (not changed)
+  const unknown = headers
+    .slice(0, wanted.length)
+    .map((h, i) => ({ h, i }))
+    .filter(x => x.h && !wanted.includes(x.h))
+    .map(x => `${colLetter_(x.i + 1)}="${x.h}"`);
+
+  if (changes.length || unknown.length) {
+    log_("Header repair", { changes, unknownHeaders: unknown });
   }
 }
 
@@ -437,6 +707,124 @@ function hideIfExists_(sh, headerName) {
   if (idx >= 0) sh.hideColumns(idx + 1);
 }
 
+function showIfExists_(sh, headerName) {
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => (x || "").toString().trim());
+  const idx = headers.indexOf(headerName);
+  if (idx >= 0) sh.showColumns(idx + 1);
+}
+
+/* ===================== ROW DEFAULTS (#, Date, Nights, Tax Rate) ===================== */
+/**
+ * Fill the "boring" columns for a booking row so staff only type Room / Name / Amount:
+ *  - #          next booking sequence (max existing + 1)
+ *  - Date       today (EST) if blank
+ *  - Nights     1 if blank
+ *  - Tax Rate   CFG.DEFAULT_TAX_RATE (16%) if blank
+ *  - Invoice Status  PENDING if blank
+ * Never overwrites a value that is already present.
+ */
+function fillRowDefaults_(sh, row, C) {
+  const room = C.room ? sh.getRange(row, C.room).getValue() : "";
+  if (!room) return;
+
+  if (C.seq && !sh.getRange(row, C.seq).getValue()) {
+    sh.getRange(row, C.seq).setValue(nextBookingSeq_(sh, C, row));
+  }
+  if (C.date && !sh.getRange(row, C.date).getValue()) {
+    sh.getRange(row, C.date).setValue(startOfDay_(nowEST_()));
+  }
+  if (C.nights && !sh.getRange(row, C.nights).getValue()) {
+    sh.getRange(row, C.nights).setValue(1);
+  }
+  if (C.taxRate && sh.getRange(row, C.taxRate).getValue() === "") {
+    sh.getRange(row, C.taxRate).setValue(CFG.DEFAULT_TAX_RATE);
+  }
+  if (C.invoiceStatus && !sh.getRange(row, C.invoiceStatus).getValue()) {
+    sh.getRange(row, C.invoiceStatus).setValue("PENDING");
+    handleInvoiceStatusChange_(sh, row, C, "PENDING");
+  }
+}
+
+/** Next value for the "#" column: highest numeric value in the column + 1. */
+function nextBookingSeq_(sh, C, excludeRow) {
+  if (!C.seq) return "";
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return 1;
+  const vals = sh.getRange(2, C.seq, lastRow - 1, 1).getValues();
+  let max = 0;
+  vals.forEach((r, i) => {
+    if (excludeRow && i + 2 === excludeRow) return;
+    const n = toNumber_(r[0]);
+    if (n > max) max = n;
+  });
+  return max + 1;
+}
+
+/* ===================== EXPECTED CHECKOUT + DURATION ===================== */
+/**
+ * Expected CheckOut (col T) = (CheckInTime if present, else Date) + nights, at 11:00 AM.
+ */
+function updateExpectedCheckOut_(sh, row, C) {
+  if (!C.expectedCheckOut || !C.nights) return;
+  const start = stayStartDate_(sh, row, C);
+  if (!start) return;
+
+  const nights = Math.max(1, Math.floor(toNumber_(sh.getRange(row, C.nights).getValue() || 1)));
+  const out = addDays_(startOfDay_(start), nights);
+  out.setHours(CFG.STAY.CHECKOUT_HOUR, 0, 0, 0);
+  sh.getRange(row, C.expectedCheckOut).setValue(out);
+  return out;
+}
+
+/**
+ * Duration (col J) = actual length of stay between CheckInTime and CheckOutTime,
+ * e.g. "3 night(s) · 70h 25m". Flags late checkout / overstay vs. booked nights.
+ */
+function updateDuration_(sh, row, C) {
+  if (!C.duration) return;
+  const inT = C.checkInTime ? sh.getRange(row, C.checkInTime).getValue() : "";
+  const outT = C.checkOutTime ? sh.getRange(row, C.checkOutTime).getValue() : "";
+  if (!inT || !outT) return;
+
+  const a = inT instanceof Date ? inT : new Date(inT);
+  const b = outT instanceof Date ? outT : new Date(outT);
+  const ms = Math.max(0, b - a);
+  const totalMin = Math.round(ms / 60000);
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+
+  // Nights actually used = calendar nights between the two dates (min 1)
+  const nightsUsed = Math.max(1, Math.round((startOfDay_(b) - startOfDay_(a)) / 86400000));
+  const booked = C.nights ? Math.max(1, Math.floor(toNumber_(sh.getRange(row, C.nights).getValue() || 1))) : nightsUsed;
+
+  let text = `${nightsUsed} night(s) · ${hours}h ${String(mins).padStart(2, "0")}m`;
+  if (nightsUsed > booked) text += ` ⚠ overstay +${nightsUsed - booked}`;
+  else if (b.getHours() >= CFG.STAY.CHECKOUT_HOUR + 1 && nightsUsed === booked) text += " ⚠ late checkout";
+
+  sh.getRange(row, C.duration).setValue(text);
+}
+
+/** Start of the stay: CheckInTime → Date → null */
+function stayStartDate_(sh, row, C) {
+  let start = C.checkInTime ? sh.getRange(row, C.checkInTime).getValue() : "";
+  if (!start && C.date) start = sh.getRange(row, C.date).getValue();
+  if (!start) return null;
+  const d = start instanceof Date ? start : new Date(start);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function startOfDay_(d) {
+  const x = new Date(d instanceof Date ? d.getTime() : new Date(d).getTime());
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function addDays_(d, n) {
+  const x = new Date(d.getTime());
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
 /* ===================== QUOTE CALC ===================== */
 function updateQuoteForRow_(sh, row, C) {
   if (!C.room || !C.amount || !C.nights || !C.subtotal || !C.total || !C.taxRate) return;
@@ -446,14 +834,23 @@ function updateQuoteForRow_(sh, row, C) {
 
   const nights = Math.max(1, Math.floor(toNumber_(sh.getRange(row, C.nights).getValue() || 1)));
   const rate = toNumber_(sh.getRange(row, C.amount).getValue());
+
+  // Make the 16% default visible in the Tax Rate cell if it is blank
+  if (sh.getRange(row, C.taxRate).getValue() === "") {
+    sh.getRange(row, C.taxRate).setValue(CFG.DEFAULT_TAX_RATE);
+  }
   const taxRate = toTaxRate_(sh.getRange(row, C.taxRate).getValue());
 
   const subtotal = +(rate * nights).toFixed(2);
-  const total = +(subtotal * (1 + taxRate)).toFixed(2);
+  const tax = +(subtotal * taxRate).toFixed(2);
+  const total = +(subtotal + tax).toFixed(2);
 
   sh.getRange(row, C.nights).setValue(nights);      // normalize
   sh.getRange(row, C.subtotal).setValue(subtotal);
   sh.getRange(row, C.total).setValue(total);
+  if (C.taxAmount) sh.getRange(row, C.taxAmount).setValue(tax);
+
+  updateExpectedCheckOut_(sh, row, C);
 }
 
 /* ===================== FLAT AMOUNT CALC (Total Including Tax) ===================== */
@@ -471,6 +868,7 @@ function updateQuoteFromTotal_(sh, row, C, flatTotal) {
   // total = subtotal * (1 + taxRate)
   // subtotal = total / (1 + taxRate)
   const subtotal = +(flatTotal / (1 + taxRate)).toFixed(2);
+  const tax = +(flatTotal - subtotal).toFixed(2);
   
   // Calculate per-night rate
   const rate = +(subtotal / nights).toFixed(2);
@@ -480,6 +878,9 @@ function updateQuoteFromTotal_(sh, row, C, flatTotal) {
   sh.getRange(row, C.amount).setValue(rate);
   sh.getRange(row, C.subtotal).setValue(subtotal);
   sh.getRange(row, C.total).setValue(flatTotal);
+  if (C.taxAmount) sh.getRange(row, C.taxAmount).setValue(tax);
+  if (sh.getRange(row, C.taxRate).getValue() === "") sh.getRange(row, C.taxRate).setValue(taxRate);
+  updateExpectedCheckOut_(sh, row, C);
   
   log_("Flat amount calculated", { 
     room, 
@@ -505,8 +906,157 @@ function menuGenerateInvoice() {
   }
   const C = cols_(sh);
   updateQuoteForRow_(sh, row, C);
-  generateInvoiceForRow_(sh, row, C, true);
-  SpreadsheetApp.getUi().alert("Invoice generated/reprinted.");
+  const result = generateInvoiceForRow_(sh, row, C, true);
+  if (result && result.url) {
+    SpreadsheetApp.getUi().alert(`Invoice ${result.inv} generated.\n\n${result.url}`);
+  } else {
+    SpreadsheetApp.getUi().alert("Invoice was not generated (row is VOID or missing Room / required columns).");
+  }
+}
+
+function menuEmailInvoice() {
+  try {
+    const sh = SpreadsheetApp.getActiveSheet();
+    if (sh.getName() !== CFG.SHEET) { SpreadsheetApp.getUi().alert("Run this from FrontDesk_Log."); return; }
+    const row = sh.getActiveRange().getRow();
+    if (row < 2) { SpreadsheetApp.getUi().alert("Select a data row first."); return; }
+
+    const C = cols_(sh);
+    const ui = SpreadsheetApp.getUi();
+    let email = C.guestEmail ? (sh.getRange(row, C.guestEmail).getValue() || "").toString().trim() : "";
+
+    if (!email) {
+      const resp = ui.prompt("Email Invoice", "No Guest Email on this row. Enter the guest's email address:", ui.ButtonSet.OK_CANCEL);
+      if (resp.getSelectedButton() !== ui.Button.OK) return;
+      email = resp.getResponseText().trim();
+      if (email && C.guestEmail) sh.getRange(row, C.guestEmail).setValue(email);
+    }
+    if (!isValidEmail_(email)) { ui.alert("Invalid email address: " + email); return; }
+
+    updateQuoteForRow_(sh, row, C);
+    const result = generateInvoiceForRow_(sh, row, C, true, { email: email, skipAutoEmail: true });
+    if (!result || !result.pdf) { ui.alert("Invoice could not be generated for this row."); return; }
+
+    sendInvoiceEmail_(email, result.inv, result.pdf, sh, row, C);
+    ui.alert(`Invoice ${result.inv} emailed to ${email}.`);
+  } catch (error) {
+    log_("Error in menuEmailInvoice", { error: error.toString() });
+    SpreadsheetApp.getUi().alert("Error: " + error.toString());
+  }
+}
+
+function menuVoidInvoice() {
+  try {
+    const sh = SpreadsheetApp.getActiveSheet();
+    if (sh.getName() !== CFG.SHEET) { SpreadsheetApp.getUi().alert("Run this from FrontDesk_Log."); return; }
+    const row = sh.getActiveRange().getRow();
+    if (row < 2) { SpreadsheetApp.getUi().alert("Select a data row first."); return; }
+
+    const C = cols_(sh);
+    if (!C.invoiceStatus) { SpreadsheetApp.getUi().alert("Invoice Status column not found."); return; }
+
+    const ui = SpreadsheetApp.getUi();
+    const inv = C.invoiceNo ? sh.getRange(row, C.invoiceNo).getValue() : "";
+    const resp = ui.prompt("Void Invoice",
+      `Void invoice ${inv || "(none yet)"} on row ${row}?\nEnter a reason (added to Desk Notes):`, ui.ButtonSet.OK_CANCEL);
+    if (resp.getSelectedButton() !== ui.Button.OK) return;
+
+    const reason = resp.getResponseText().trim();
+    sh.getRange(row, C.invoiceStatus).setValue("VOID");
+    handleInvoiceStatusChange_(sh, row, C, "VOID");
+
+    if (C.deskNotes) {
+      const existing = (sh.getRange(row, C.deskNotes).getValue() || "").toString();
+      const stamp = `[VOID ${fmt_(nowEST_(), "MM/dd/yyyy hh:mm a")}${reason ? " – " + reason : ""}]`;
+      sh.getRange(row, C.deskNotes).setValue(existing ? existing + "\n" + stamp : stamp);
+    }
+    ui.alert(`Row ${row} marked VOID. Total With Tax is unlocked so it can be corrected.\nUse "Generate/Reprint Invoice" after setting status back to PAID to issue a new invoice.`);
+  } catch (error) {
+    log_("Error in menuVoidInvoice", { error: error.toString() });
+    SpreadsheetApp.getUi().alert("Error: " + error.toString());
+  }
+}
+
+/** Colour the Invoice Status cell and unlock/lock the Total cell depending on status. */
+function handleInvoiceStatusChange_(sh, row, C, status) {
+  if (!C.invoiceStatus) return;
+  const s = (status || "").toString().trim().toUpperCase();
+  const cell = sh.getRange(row, C.invoiceStatus);
+  if (s === "VOID") {
+    cell.setBackground("#F8D7DA").setFontColor("#721C24");
+    unprotectTotal_(sh, row, C);   // allow the total to be corrected
+  } else if (s === "REFUNDED") {
+    cell.setBackground("#FFF3CD").setFontColor("#856404");
+  } else if (s === "PAID") {
+    cell.setBackground("#D4EDDA").setFontColor("#155724");
+  } else if (s === "PENDING") {
+    cell.setBackground("#E2E3E5").setFontColor("#383D41");
+  } else {
+    cell.setBackground(null).setFontColor(null);
+  }
+}
+
+function unprotectTotal_(sh, row, C) {
+  if (!C.total) return;
+  try {
+    const a1 = sh.getRange(row, C.total).getA1Notation();
+    sh.getProtections(SpreadsheetApp.ProtectionType.RANGE)
+      .filter(p => p.getRange().getA1Notation() === a1)
+      .forEach(p => p.remove());
+  } catch (error) {
+    log_("Error unprotecting Total", { row, error: error.toString() });
+  }
+}
+
+function isValidEmail_(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((s || "").toString().trim());
+}
+
+function sendInvoiceEmail_(email, inv, pdf, sh, row, C) {
+  const guest = C.guest ? sh.getRange(row, C.guest).getValue() : "";
+  const room = C.room ? sh.getRange(row, C.room).getValue() : "";
+  const total = C.total ? toNumber_(sh.getRange(row, C.total).getValue()) : 0;
+  const body =
+`Dear ${guest || "Guest"},
+
+Thank you for staying with us at ${CFG.MOTEL.name}.
+Attached is your invoice ${inv} for Room ${room} (Total: $${total.toFixed(2)}).
+
+${CFG.MOTEL.name}
+${CFG.MOTEL.addr1}, ${CFG.MOTEL.addr2}
+Phone: ${CFG.MOTEL.phone} | Email: ${CFG.MOTEL.email}`;
+
+  GmailApp.sendEmail(email, `Invoice ${inv} - ${CFG.MOTEL.name}`, body, {
+    attachments: [pdf],
+    name: CFG.MOTEL.name,
+  });
+  log_("Invoice emailed", { inv, email, row });
+}
+
+function menuRecalculateRows() {
+  try {
+    const sh = SpreadsheetApp.getActiveSheet();
+    if (sh.getName() !== CFG.SHEET) { SpreadsheetApp.getUi().alert("Run this from FrontDesk_Log."); return; }
+    const range = sh.getActiveRange();
+    const startRow = Math.max(2, range.getRow());
+    const endRow = range.getLastRow();
+    if (endRow < 2) { SpreadsheetApp.getUi().alert("Select data rows first."); return; }
+
+    const C = cols_(sh);
+    let count = 0;
+    for (let row = startRow; row <= endRow; row++) {
+      if (!C.room || !sh.getRange(row, C.room).getValue()) continue;
+      fillRowDefaults_(sh, row, C);
+      updateQuoteForRow_(sh, row, C);
+      updateDuration_(sh, row, C);
+      if (C.invoiceStatus) handleInvoiceStatusChange_(sh, row, C, sh.getRange(row, C.invoiceStatus).getValue());
+      count++;
+    }
+    SpreadsheetApp.getUi().alert(`Recalculated ${count} row(s): #, Tax Amount, Subtotal, Total, Expected CheckOut, Duration.`);
+  } catch (error) {
+    log_("Error in menuRecalculateRows", { error: error.toString() });
+    SpreadsheetApp.getUi().alert("Error: " + error.toString());
+  }
 }
 
 /**
@@ -530,12 +1080,23 @@ function generateInvoiceForRowOnCheckIn_(sh, row, C) {
   generateInvoiceForRow_(sh, row, C2, true);
 }
 
-function generateInvoiceForRow_(sh, row, C, force) {
-  if (!C.room || !C.guest || !C.amount || !C.nights || !C.taxRate || !C.invoiceNo || !C.invoiceStatus || !C.invoiceUrl || !C.checkOutTime) return;
+/**
+ * Build the invoice PDF for a row, save it to Drive, write the URL to the sheet
+ * and (unless opts.skipAutoEmail) email it to the Guest Email column.
+ *
+ * Layout mirrors a hotel booking confirmation:
+ *   header (motel) → Total price → Dates / Check-in / Reservation / Room type / Rate
+ *   → "N nights stay" nightly breakdown → Taxes → Total price → Payment information
+ *
+ * @returns {{inv:string, url:string, pdf:Blob}|null}
+ */
+function generateInvoiceForRow_(sh, row, C, force, opts) {
+  opts = opts || {};
+  if (!C.room || !C.guest || !C.amount || !C.nights || !C.taxRate || !C.invoiceNo || !C.invoiceStatus || !C.invoiceUrl || !C.checkOutTime) return null;
 
   const room = sh.getRange(row, C.room).getValue();
   const guest = sh.getRange(row, C.guest).getValue();
-  if (!room) return;
+  if (!room) return null;
 
   let inv = sh.getRange(row, C.invoiceNo).getValue();
   if (!inv) {
@@ -543,145 +1104,180 @@ function generateInvoiceForRow_(sh, row, C, force) {
     sh.getRange(row, C.invoiceNo).setValue(inv);
   }
 
-  let status = sh.getRange(row, C.invoiceStatus).getValue();
-  if (!status) {
+  let status = (sh.getRange(row, C.invoiceStatus).getValue() || "").toString().trim().toUpperCase();
+  if (!status || status === "PENDING") {
     status = "PAID";
     sh.getRange(row, C.invoiceStatus).setValue(status);
+    handleInvoiceStatusChange_(sh, row, C, status);
   }
-  if (String(status).toUpperCase() === "VOID") return;
+  if (status === "VOID") return null;
 
   const existingUrl = sh.getRange(row, C.invoiceUrl).getValue();
-  if (existingUrl && !force) return;
+  if (existingUrl && !force) return null;
 
+  /* ---------- money ---------- */
   const nights = Math.max(1, Math.floor(toNumber_(sh.getRange(row, C.nights).getValue() || 1)));
   const rate = toNumber_(sh.getRange(row, C.amount).getValue());
   const taxRate = toTaxRate_(sh.getRange(row, C.taxRate).getValue());
 
-  const subtotal = +(rate * nights).toFixed(2);
-  const tax = +(subtotal * taxRate).toFixed(2);
-  const total = +(subtotal + tax).toFixed(2);
+  // Prefer the sheet's Subtotal/Total (they may have been entered as a flat amount)
+  let subtotal = C.subtotal ? toNumber_(sh.getRange(row, C.subtotal).getValue()) : 0;
+  if (!subtotal) subtotal = +(rate * nights).toFixed(2);
+  let total = C.total ? toNumber_(sh.getRange(row, C.total).getValue()) : 0;
+  if (!total) total = +(subtotal * (1 + taxRate)).toFixed(2);
+  const tax = +(total - subtotal).toFixed(2);
+  if (C.taxAmount) sh.getRange(row, C.taxAmount).setValue(tax);
 
+  /* ---------- dates ---------- */
   const paidAt = sh.getRange(row, C.checkOutTime).getValue() || nowEST_();
+  const checkInTs = C.checkInTime ? sh.getRange(row, C.checkInTime).getValue() : "";
+  const stayStart = startOfDay_(stayStartDate_(sh, row, C) || paidAt);
+  const stayEnd = addDays_(stayStart, nights);
+  const checkInText = checkInTs ? fmt_(checkInTs, "h:mm a") : CFG.STAY.CHECKIN_TEXT;
+  const nightsText = nights === 1 ? "night" : "nights";
+  const datesLine = `${fmt_(stayStart, "MMM d")} - ${fmt_(stayEnd, "MMM d, yyyy")} (${nights} ${nightsText})`;
+
+  // Per-night lines that add up exactly to the subtotal (last night absorbs rounding).
+  // Long stays are collapsed into one line so the invoice stays on a single A5 page.
+  const nightly = [];
+  if (nights <= CFG.INVOICE.MAX_NIGHT_LINES) {
+    let running = 0;
+    for (let i = 0; i < nights; i++) {
+      const d0 = addDays_(stayStart, i);
+      const d1 = addDays_(stayStart, i + 1);
+      let amt = +(subtotal / nights).toFixed(2);
+      if (i === nights - 1) amt = +(subtotal - running).toFixed(2);
+      running = +(running + amt).toFixed(2);
+      nightly.push({ label: `${fmt_(d0, "MMM d")} - ${fmt_(d1, "MMM d")}`, amount: amt });
+    }
+  } else {
+    nightly.push({
+      label: `${fmt_(stayStart, "MMM d")} - ${fmt_(stayEnd, "MMM d")} · ${nights} nights × ${(subtotal / nights).toFixed(2)}`,
+      amount: subtotal,
+    });
+  }
+
+  /* ---------- room / payment details ---------- */
+  const roomLabels = getRoomLabels_(SpreadsheetApp.getActiveSpreadsheet());
+  const roomType = (roomLabels[normalizeRoomNumber_(room)] || "").replace(/^\[|\]$/g, "") || "Standard Room";
 
   const processor = C.processor ? sh.getRange(row, C.processor).getValue() : "";
   const receipt = C.receipt ? sh.getRange(row, C.receipt).getValue() : "";
   const last4 = C.last4 ? sh.getRange(row, C.last4).getValue() : "";
   const auth = C.auth ? sh.getRange(row, C.auth).getValue() : "";
   const paymentType = C.paymentType ? sh.getRange(row, C.paymentType).getValue() : "";
+  const guestEmail = C.guestEmail ? (sh.getRange(row, C.guestEmail).getValue() || "").toString().trim() : "";
 
-  const perNightRate = rate.toFixed(2);
-  const nightsText = nights === 1 ? "night" : "nights";
-  
+  const cur = CFG.INVOICE.CURRENCY;
+  const money = n => `${Number(n).toFixed(2)} ${cur}`;
+  const esc = s => (s === null || s === undefined ? "" : String(s))
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const kv = (k, v, extra) => `
+        <tr>
+          <td style="padding:4px 0; color:#333; font-weight:bold; vertical-align:top; white-space:nowrap;">${k}</td>
+          <td style="padding:4px 0; color:#333; text-align:right; vertical-align:top;">${v}${extra ? `<div style="font-size:8.5pt; color:#777; margin-top:1px;">${extra}</div>` : ""}</td>
+        </tr>`;
+  const hr = `<tr><td colspan="2" style="border-bottom:1px solid #e3e3e3; padding:0; height:1px;"></td></tr>`;
+  const statusColor = status === "PAID" ? "#27ae60" : (status === "REFUNDED" ? "#e67e22" : "#7f8c8d");
+  const motelName = esc(CFG.MOTEL.name.replace(/\s+/g, " ").trim());
+
+  // Payment info: only show lines that have data (keeps the A5 page short)
+  const payLines = [
+    ["Payment type", paymentType],
+    ["Payment processor", processor],
+    ["Receipt / transaction #", receipt],
+    ["Card", last4 ? "•••• " + last4 : ""],
+    ["Auth code", auth],
+  ].filter(([, v]) => v !== "" && v !== null && v !== undefined);
+
   const html = `
-  <html><body style="font-family:Arial, sans-serif; font-size:13px; margin:0; padding:20px; background-color:#ffffff;">
-    <div style="text-align:center; margin-bottom:25px; border-bottom:2px solid #333; padding-bottom:15px;">
-      <h1 style="margin:0; color:#2c3e50; font-size:24px;">${CFG.MOTEL.name}</h1>
-      <div style="margin-top:8px; color:#555; font-size:13px;">
-        ${CFG.MOTEL.addr1}<br>
-        ${CFG.MOTEL.addr2}
-      </div>
-      <div style="margin-top:8px; color:#666; font-size:12px;">
-        Phone: ${CFG.MOTEL.phone} | Email: ${CFG.MOTEL.email}
-      </div>
-    </div>
-    
-    <div style="margin-bottom:20px;">
-      <h2 style="margin:0 0 15px 0; color:#2c3e50; font-size:18px; border-bottom:1px solid #ddd; padding-bottom:8px;">INVOICE</h2>
-      <table style="width:100%; margin-bottom:15px; border-collapse:collapse;">
-        <tr>
-          <td style="padding:5px 10px 5px 0; color:#555; width:140px;"><b>Invoice #:</b></td>
-          <td style="padding:5px 0; color:#333;">${inv}</td>
-        </tr>
-        <tr>
-          <td style="padding:5px 10px 5px 0; color:#555;"><b>Guest:</b></td>
-          <td style="padding:5px 0; color:#333;">${guest || "-"}</td>
-        </tr>
-        <tr>
-          <td style="padding:5px 10px 5px 0; color:#555;"><b>Room:</b></td>
-          <td style="padding:5px 0; color:#333;">${room}</td>
-        </tr>
-        <tr>
-          <td style="padding:5px 10px 5px 0; color:#555;"><b>Date (EST):</b></td>
-          <td style="padding:5px 0; color:#333;">${fmt_(paidAt,"MM/dd/yyyy hh:mm a")}</td>
-        </tr>
+  <html><head><meta charset="utf-8">
+  <style>
+    @page { size: ${CFG.INVOICE.PAGE_SIZE}; margin: ${CFG.INVOICE.PAGE_MARGIN}; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; color: #222; margin: 0; padding: 0; background: #fff; }
+    table { width: 100%; border-collapse: collapse; }
+    .sec { margin-top: 8px; font-size: 10.5pt; font-weight: bold; color: #1a1a1a; }
+    .line td { padding: 2px 0; color: #555; }
+    .line td:first-child { padding-left: 10px; }
+    .line td:last-child { text-align: right; white-space: nowrap; }
+  </style></head>
+  <body>
+
+    <!-- Motel header -->
+    <table style="margin-bottom:6px;">
+      <tr>
+        <td style="width:30px; vertical-align:top;">
+          <div style="width:24px; height:24px; background:#1f3a68; color:#fff; font-weight:bold; font-size:12pt; text-align:center; line-height:24px; border-radius:3px;">${esc(CFG.MOTEL.name.trim().charAt(0))}</div>
+        </td>
+        <td style="vertical-align:top;">
+          <div style="font-size:12.5pt; font-weight:bold; color:#1a1a1a;">${motelName}</div>
+          <div style="font-size:8.5pt; color:#555; margin-top:1px;">${esc(CFG.MOTEL.addr1)}, ${esc(CFG.MOTEL.addr2)}, United States</div>
+          <div style="font-size:8pt; color:#666; margin-top:1px;">Phone: ${esc(CFG.MOTEL.phone)} &nbsp;|&nbsp; ${esc(CFG.MOTEL.email)}</div>
+        </td>
+        <td style="vertical-align:top; text-align:right; white-space:nowrap;">
+          <div style="font-size:11pt; font-weight:bold; color:#1a1a1a;">INVOICE</div>
+          <div style="font-size:8.5pt; color:#555; margin-top:1px;">${esc(inv)}</div>
+          <div style="display:inline-block; margin-top:3px; padding:1px 7px; border-radius:3px; background:${statusColor}; color:#fff; font-size:7.5pt; font-weight:bold;">${esc(status)}</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Guest / stay summary (like a booking confirmation) -->
+    <table style="border-top:1px solid #e3e3e3;">
+      ${kv("Total price", `<span style="font-size:12pt; font-weight:bold;">${money(total)}</span>`)}
+      ${hr}
+      ${kv("Guest", esc(guest || "-"), guestEmail ? esc(guestEmail) : "")}
+      ${hr}
+      ${kv("Dates", esc(datesLine), `Check in ${esc(checkInText)} &nbsp;·&nbsp; Check out ${esc(CFG.STAY.CHECKOUT_TEXT)}`)}
+      ${hr}
+      ${kv("Reservation", `1 room &nbsp;·&nbsp; Room ${esc(room)} &nbsp;·&nbsp; ${esc(roomType)}`)}
+      ${hr}
+      ${kv("Rate name", esc(CFG.INVOICE.RATE_NAME), `${money(rate)} per night`)}
+      ${hr}
+      ${kv("Invoice date", fmt_(paidAt, "MMM d, yyyy h:mm a") + " (EST)")}
+      ${hr}
+    </table>
+
+    <!-- Nightly breakdown -->
+    <div class="sec">${nights} ${nightsText} stay</div>
+    <table style="margin-top:2px;">
+      ${nightly.map(n => `<tr class="line"><td>${esc(n.label)}</td><td>${money(n.amount)}</td></tr>`).join("")}
+      <tr>
+        <td style="padding:4px 0 2px 0; color:#333; font-weight:bold;">Room charges subtotal</td>
+        <td style="padding:4px 0 2px 0; color:#333; text-align:right; font-weight:bold;">${money(subtotal)}</td>
+      </tr>
+    </table>
+
+    <!-- Taxes -->
+    <div class="sec">Taxes</div>
+    <table style="margin-top:2px;">
+      <tr class="line"><td>${esc(CFG.INVOICE.TAX_LABEL)} (${Math.round(taxRate * 10000) / 100}%)</td><td>${money(tax)}</td></tr>
+    </table>
+
+    <!-- Total -->
+    <table style="margin-top:8px; border-top:2px solid #1a1a1a; border-bottom:1px solid #e3e3e3;">
+      <tr>
+        <td style="padding:6px 0; font-size:12pt; font-weight:bold; color:#1a1a1a;">Total price</td>
+        <td style="padding:6px 0; font-size:12pt; font-weight:bold; color:#1a1a1a; text-align:right;">${money(total)}</td>
+      </tr>
+    </table>
+
+    <!-- Payment information -->
+    <div style="margin-top:8px; padding:6px 10px; background-color:#f5f7fa; border-left:3px solid #1f3a68;">
+      <div style="font-size:9pt; color:#333; margin-bottom:2px; font-weight:bold;">Payment information</div>
+      <table style="font-size:8.5pt;">
+        ${payLines.length ? payLines.map(([k, v]) =>
+          `<tr><td style="padding:1px 8px 1px 0; color:#666; width:130px;">${esc(k)}</td><td style="padding:1px 0; color:#333;">${esc(v)}</td></tr>`).join("")
+          : `<tr><td style="padding:1px 0; color:#666;">Payment on file</td></tr>`}
       </table>
     </div>
 
-    <div style="margin-bottom:20px; padding:12px; background-color:#f8f9fa; border-left:4px solid #3498db;">
-      <div style="font-size:12px; color:#555; margin-bottom:8px;"><b>Payment Information:</b></div>
-      <table style="width:100%; font-size:12px; border-collapse:collapse;">
-        <tr>
-          <td style="padding:3px 10px 3px 0; color:#666; width:160px;">Payment Type:</td>
-          <td style="padding:3px 0; color:#333;">${paymentType || "-"}</td>
-        </tr>
-        <tr>
-          <td style="padding:3px 10px 3px 0; color:#666;">Payment Processor:</td>
-          <td style="padding:3px 0; color:#333;">${processor || "-"}</td>
-        </tr>
-        <tr>
-          <td style="padding:3px 10px 3px 0; color:#666;">Receipt / Transaction #:</td>
-          <td style="padding:3px 0; color:#333;">${receipt || "-"}</td>
-        </tr>
-        <tr>
-          <td style="padding:3px 10px 3px 0; color:#666;">Card Last 4:</td>
-          <td style="padding:3px 0; color:#333;">${last4 || "-"}</td>
-        </tr>
-        <tr>
-          <td style="padding:3px 10px 3px 0; color:#666;">Auth Code:</td>
-          <td style="padding:3px 0; color:#333;">${auth || "-"}</td>
-        </tr>
-      </table>
-    </div>
-
-    <div style="margin-bottom:20px;">
-      <table border="1" width="100%" cellpadding="10" cellspacing="0" style="border-collapse:collapse; border:1px solid #ddd;">
-        <thead>
-          <tr style="background-color:#34495e; color:#fff;">
-            <th align="left" style="padding:10px; font-weight:bold; font-size:13px;">Description</th>
-            <th align="right" style="padding:10px; font-weight:bold; font-size:13px; width:120px;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="padding:10px; border-bottom:1px solid #eee;">
-              <div style="font-weight:500; color:#2c3e50; margin-bottom:4px;">Lodging</div>
-              <div style="font-size:11px; color:#666;">
-                ${nights} ${nightsText} @ $${perNightRate}/night
-              </div>
-            </td>
-            <td align="right" style="padding:10px; border-bottom:1px solid #eee; font-weight:500; color:#2c3e50;">
-              $${subtotal.toFixed(2)}
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:10px; border-bottom:1px solid #eee;">
-              <div style="font-weight:500; color:#2c3e50;">Tax</div>
-              <div style="font-size:11px; color:#666;">
-                ${(taxRate*100).toFixed(2)}%
-              </div>
-            </td>
-            <td align="right" style="padding:10px; border-bottom:1px solid #eee; font-weight:500; color:#2c3e50;">
-              $${tax.toFixed(2)}
-            </td>
-          </tr>
-          <tr style="background-color:#ecf0f1; font-weight:bold;">
-            <td style="padding:12px; font-size:14px; color:#2c3e50;">Total Paid</td>
-            <td align="right" style="padding:12px; font-size:16px; color:#27ae60;">
-              $${total.toFixed(2)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div style="margin-top:25px; padding-top:15px; border-top:1px solid #ddd; text-align:center;">
-      <p style="font-size:11px; color:#7f8c8d; margin:0;">
-        Receipt for lodging paid. Keep this document for your records.
-      </p>
+    <div style="margin-top:10px; padding-top:6px; border-top:1px solid #e3e3e3; text-align:center; font-size:8pt; color:#7f8c8d;">
+      ${esc(CFG.INVOICE.FOOTER)} &nbsp;·&nbsp; Thank you for staying at ${motelName}.
     </div>
   </body></html>`;
 
-  const fileName = `${room}_${safeName_(guest)}_${fmt_(paidAt,"yyyyMMdd_HHmmss")}.pdf`;
+  const fileName = `${inv}_${room}_${safeName_(guest)}_${fmt_(paidAt,"yyyyMMdd_HHmmss")}.pdf`;
   const pdf = Utilities.newBlob(html, "text/html").getAs("application/pdf").setName(fileName);
   const file = folderToday_().createFile(pdf);
 
@@ -698,13 +1294,17 @@ function generateInvoiceForRow_(sh, row, C, force) {
   
   sh.getRange(row, C.invoiceUrl).setValue(fileUrl);
 
-  // Email optional
-  if (C.guestEmail) {
-    const email = sh.getRange(row, C.guestEmail).getValue();
-    if (email) {
-      GmailApp.sendEmail(email, `Invoice ${inv} - ${CFG.MOTEL.name}`, "Invoice attached.", { attachments: [pdf] });
+  // Auto-email when a Guest Email is on the row (menuEmailInvoice sends its own)
+  if (!opts.skipAutoEmail && guestEmail && isValidEmail_(guestEmail)) {
+    try {
+      sendInvoiceEmail_(guestEmail, inv, pdf, sh, row, C);
+    } catch (e) {
+      log_("Invoice email failed", { row, inv, email: guestEmail, error: e.toString() });
     }
   }
+
+  log_("Invoice generated", { row, inv, room, total, nights, taxRate });
+  return { inv: inv, url: fileUrl, pdf: pdf };
 }
 
 /* ===================== DRIVE + SEQ ===================== */
@@ -1302,7 +1902,7 @@ function generateMonthlyReport_(sh, date) {
   const C = cols_(sh);
   const data = sh.getDataRange().getValues();
   
-  let totalRevenue = 0, totalCheckIns = 0, totalCheckOuts = 0;
+  let totalRevenue = 0, totalCheckIns = 0, totalCheckOuts = 0, totalTax = 0, totalSubtotal = 0, totalNights = 0;
   const paymentTypes = {};
   
   for (let i = 1; i < data.length; i++) {
@@ -1314,12 +1914,20 @@ function generateMonthlyReport_(sh, date) {
       const checkIn = C.checkIn ? toYes_(data[i][C.checkIn - 1]) : false;
       const checkOut = C.checkOut ? toYes_(data[i][C.checkOut - 1]) : false;
       const total = C.total ? toNumber_(data[i][C.total - 1]) : 0;
+      const subtotal = C.subtotal ? toNumber_(data[i][C.subtotal - 1]) : 0;
+      const nights = C.nights ? toNumber_(data[i][C.nights - 1]) : 0;
+      const taxRate = C.taxRate ? toTaxRate_(data[i][C.taxRate - 1]) : CFG.DEFAULT_TAX_RATE;
+      let tax = C.taxAmount ? toNumber_(data[i][C.taxAmount - 1]) : 0;
+      if (!tax && total) tax = +(total - (subtotal || total / (1 + taxRate))).toFixed(2);
       const paymentType = C.paymentType ? (data[i][C.paymentType - 1] || "Unknown") : "Unknown";
       
       if (checkIn) totalCheckIns++;
       if (checkOut) {
         totalCheckOuts++;
         totalRevenue += total;
+        totalTax += tax;
+        totalSubtotal += subtotal || (total - tax);
+        totalNights += nights;
         
         if (!paymentTypes[paymentType]) paymentTypes[paymentType] = 0;
         paymentTypes[paymentType] += total;
@@ -1330,6 +1938,9 @@ function generateMonthlyReport_(sh, date) {
   return {
     period: fmt_(startOfMonth, "MMMM yyyy"),
     totalRevenue: totalRevenue,
+    totalSubtotal: totalSubtotal,
+    totalTax: totalTax,
+    totalNights: totalNights,
     totalCheckIns: totalCheckIns,
     totalCheckOuts: totalCheckOuts,
     paymentTypes: paymentTypes,
@@ -1399,7 +2010,10 @@ function showReportDialog_(title, data) {
     html += `<p><b>Period:</b> ${data.period}</p>`;
     html += `<p><b>Total Check-ins:</b> ${data.totalCheckIns}</p>`;
     html += `<p><b>Total Check-outs:</b> ${data.totalCheckOuts}</p>`;
-    html += `<p><b>Total Revenue:</b> $${data.totalRevenue.toFixed(2)}</p>`;
+    html += `<p><b>Total Revenue (with tax):</b> $${data.totalRevenue.toFixed(2)}</p>`;
+    html += `<p><b>Room Charges (before tax):</b> $${(data.totalSubtotal || 0).toFixed(2)}</p>`;
+    html += `<p><b>${CFG.INVOICE.TAX_LABEL} Collected:</b> $${(data.totalTax || 0).toFixed(2)}</p>`;
+    html += `<p><b>Room Nights Sold:</b> ${data.totalNights || 0}</p>`;
     html += `<p><b>Average Revenue per Check-out:</b> $${data.averageRevenue}</p>`;
     html += `<h3>Revenue by Payment Type:</h3><ul>`;
     for (const [type, amount] of Object.entries(data.paymentTypes)) {
@@ -1808,15 +2422,15 @@ function menuBulkUpdateTaxRate() {
     
     const ui = SpreadsheetApp.getUi();
     const response = ui.prompt("Bulk Update Tax Rate", 
-      `Enter new tax rate (e.g., 0.13 or 13%):`, ui.ButtonSet.OK_CANCEL);
+      `Enter new tax rate (e.g., 0.16 or 16%). Default is ${CFG.DEFAULT_TAX_RATE * 100}%:`, ui.ButtonSet.OK_CANCEL);
     
     if (response.getSelectedButton() !== ui.Button.OK) return;
     
-    const taxRateInput = response.getResponseText().trim();
+    const taxRateInput = response.getResponseText().trim() || String(CFG.DEFAULT_TAX_RATE);
     const taxRate = toTaxRate_(taxRateInput);
     
     if (taxRate <= 0 || taxRate > 1) {
-      ui.alert("Invalid tax rate. Please enter a value between 0 and 1 (e.g., 0.13) or percentage (e.g., 13%).");
+      ui.alert("Invalid tax rate. Please enter a value between 0 and 1 (e.g., 0.16) or percentage (e.g., 16%).");
       return;
     }
     
@@ -1893,7 +2507,9 @@ function menuBulkCheckout() {
         }
         
         updateQuoteForRow_(sh, row, C);
+        updateDuration_(sh, row, C);
         generateInvoiceForRow_(sh, row, C, false);
+        protectTotalAfterCheckout_(sh, row, C);
         count++;
       }
     }
@@ -2314,25 +2930,27 @@ function generateUnifiedRoomDashboard_() {
     const checkInTime = C.checkInTime ? data[i][C.checkInTime - 1] : "";
     const checkOutTime = C.checkOutTime ? data[i][C.checkOutTime - 1] : "";
     const nights = C.nights ? toNumber_(data[i][C.nights - 1]) : 0;
+    const expectedCol = C.expectedCheckOut ? data[i][C.expectedCheckOut - 1] : "";
     
     // Determine status (most recent booking takes precedence)
     let status = "Available";
     let details = { guest: "", checkInTime: "", checkOutTime: "", expectedCheckOut: "" };
     
     if (checkIn && !checkOut) {
-      // Calculate expected checkout time (always 11:00 AM)
+      // Expected checkout: prefer the "Expected CheckOut" column, else CheckInTime + nights @ 11:00 AM
       let expectedCheckOut = "";
-      if (checkInTime && nights > 0) {
-        try {
+      try {
+        if (expectedCol) {
+          expectedCheckOut = fmt_(expectedCol, "MM/dd hh:mm a");
+        } else if (checkInTime && nights > 0) {
           const checkInDate = checkInTime instanceof Date ? checkInTime : new Date(checkInTime);
           const checkoutDate = new Date(checkInDate);
           checkoutDate.setDate(checkoutDate.getDate() + nights);
-          // Set checkout time to 11:00 AM
-          checkoutDate.setHours(11, 0, 0, 0);
+          checkoutDate.setHours(CFG.STAY.CHECKOUT_HOUR, 0, 0, 0);
           expectedCheckOut = fmt_(checkoutDate, "MM/dd hh:mm a");
-        } catch (error) {
-          log_("Error calculating checkout date", { error: error.toString() });
         }
+      } catch (error) {
+        log_("Error calculating checkout date", { error: error.toString() });
       }
       
       status = "Occupied";
@@ -2430,14 +3048,20 @@ function generateUnifiedRoomDashboard_() {
     const checkOut = C.checkOut ? toYes_(data[i][C.checkOut - 1]) : false;
     const checkInTime = C.checkInTime ? data[i][C.checkInTime - 1] : "";
     const nights = C.nights ? toNumber_(data[i][C.nights - 1]) : 0;
+    const expectedCol = C.expectedCheckOut ? data[i][C.expectedCheckOut - 1] : "";
     
-    // Forecast: if checked in and not checked out yet, calculate expected checkout
-    if (checkIn && !checkOut && checkInTime && nights > 0) {
+    // Forecast: if checked in and not checked out yet, use Expected CheckOut (or compute it)
+    if (checkIn && !checkOut && (expectedCol || (checkInTime && nights > 0))) {
       try {
-        const checkInDate = checkInTime instanceof Date ? checkInTime : new Date(checkInTime);
-        const expectedCheckOutDate = new Date(checkInDate);
-        expectedCheckOutDate.setDate(expectedCheckOutDate.getDate() + nights);
-        expectedCheckOutDate.setHours(11, 0, 0, 0); // Set to 11 AM checkout time
+        let expectedCheckOutDate;
+        if (expectedCol) {
+          expectedCheckOutDate = expectedCol instanceof Date ? expectedCol : new Date(expectedCol);
+        } else {
+          const checkInDate = checkInTime instanceof Date ? checkInTime : new Date(checkInTime);
+          expectedCheckOutDate = new Date(checkInDate);
+          expectedCheckOutDate.setDate(expectedCheckOutDate.getDate() + nights);
+          expectedCheckOutDate.setHours(CFG.STAY.CHECKOUT_HOUR, 0, 0, 0);
+        }
         const expectedCheckOutStr = fmt_(expectedCheckOutDate, "MM/dd/yyyy");
         
         if (expectedCheckOutStr === todayStr) {
@@ -2956,7 +3580,7 @@ function getRecentGuests() {
  * Calculate quote totals for the form
  * @param {number} amount - Amount per night
  * @param {number} nights - Number of nights
- * @param {number} taxRate - Tax rate (as decimal, e.g., 0.13)
+ * @param {number} taxRate - Tax rate (as decimal, e.g., 0.16)
  * @returns {Object} Object with subtotal and total
  */
 function calculateBookingTotals_(amount, nights, taxRate) {
@@ -2970,17 +3594,25 @@ function calculateBookingTotals(amount, nights, taxRate) {
     const taxRateNum = parseFloat(taxRate) || CFG.DEFAULT_TAX_RATE;
     
     const subtotal = +(amountNum * nightsNum).toFixed(2);
-    const total = +(subtotal * (1 + taxRateNum)).toFixed(2);
+    const tax = +(subtotal * taxRateNum).toFixed(2);
+    const total = +(subtotal + tax).toFixed(2);
     
     return {
       subtotal: subtotal,
+      tax: tax,
       total: total,
-      nights: nightsNum
+      nights: nightsNum,
+      taxRate: taxRateNum
     };
   } catch (error) {
     log_("Error calculating totals", { error: error.toString() });
-    return { subtotal: 0, total: 0, nights: 1 };
+    return { subtotal: 0, tax: 0, total: 0, nights: 1, taxRate: CFG.DEFAULT_TAX_RATE };
   }
+}
+
+/** Default tax rate for the booking form (single source of truth: CFG.DEFAULT_TAX_RATE). */
+function getDefaultTaxRate() {
+  return CFG.DEFAULT_TAX_RATE;
 }
 
 /**
@@ -3094,11 +3726,15 @@ function saveNewBooking(bookingData) {
       subtotal = +(amount * nights).toFixed(2);
       total = +(subtotal * (1 + taxRate)).toFixed(2);
     }
+    const taxAmount = +(total - subtotal).toFixed(2);
     
     // Set values directly to specific columns (more reliable than array approach)
     // Set core booking data first
     if (C.date) {
       sh.getRange(newRow, C.date).setValue(date);
+    }
+    if (C.seq) {
+      sh.getRange(newRow, C.seq).setValue(nextBookingSeq_(sh, C, newRow));
     }
     if (C.room) {
       sh.getRange(newRow, C.room).setValue(room);
@@ -3115,11 +3751,18 @@ function saveNewBooking(bookingData) {
     if (C.taxRate) {
       sh.getRange(newRow, C.taxRate).setValue(taxRate);
     }
+    if (C.taxAmount) {
+      sh.getRange(newRow, C.taxAmount).setValue(taxAmount);
+    }
     if (C.subtotal) {
       sh.getRange(newRow, C.subtotal).setValue(subtotal);
     }
     if (C.total) {
       sh.getRange(newRow, C.total).setValue(total);
+    }
+    if (C.invoiceStatus) {
+      sh.getRange(newRow, C.invoiceStatus).setValue("PENDING");
+      handleInvoiceStatusChange_(sh, newRow, C, "PENDING");
     }
     
     // Set optional fields
@@ -3128,6 +3771,29 @@ function saveNewBooking(bookingData) {
     }
     if (C.deskNotes && bookingData.deskNotes) {
       sh.getRange(newRow, C.deskNotes).setValue(bookingData.deskNotes);
+    }
+    if (C.hkNotes && bookingData.hkNotes) {
+      sh.getRange(newRow, C.hkNotes).setValue(bookingData.hkNotes);
+    }
+    
+    // Guest contact + payment processor details (columns W → AA)
+    const optionalText = [
+      [C.guestEmail, bookingData.guestEmail],
+      [C.processor, bookingData.processor],
+      [C.receipt, bookingData.receipt],
+      [C.last4, (bookingData.last4 || "").toString().replace(/\D/g, "").slice(-4)],
+      [C.auth, bookingData.auth],
+    ];
+    optionalText.forEach(([col, val]) => {
+      const v = (val || "").toString().trim();
+      if (col && v) sh.getRange(newRow, col).setValue(v);
+    });
+    
+    // Expected CheckOut = Date + nights @ 11:00 AM
+    if (C.expectedCheckOut) {
+      const expected = addDays_(startOfDay_(date), nights);
+      expected.setHours(CFG.STAY.CHECKOUT_HOUR, 0, 0, 0);
+      sh.getRange(newRow, C.expectedCheckOut).setValue(expected);
     }
     
     // Flush to ensure data is written before other operations
@@ -3162,6 +3828,7 @@ function saveNewBooking(bookingData) {
         sh.getRange(newRow, C.checkInTime).setValue(nowEST_());
       }
       sh.getRange(newRow, C.checkIn).setBackground(CFG.COLOR.CHECKIN_YES);
+      updateExpectedCheckOut_(sh, newRow, C);   // re-base on actual check-in time
       
       // Clear old cleaned status and gray out old rows
       if (room && C.hkStatus) {

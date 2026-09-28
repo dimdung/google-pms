@@ -594,7 +594,7 @@
           </div>
         </div>
         <div class="form-group">
-          <label for="taxRate">Tax Rate</label>
+          <label for="taxRate" id="taxRateLabel">Tax Rate (16%)</label>
           <input type="number" id="taxRate" name="taxRate" step="0.01" value="0.16" min="0" max="1">
         </div>
         <div class="form-group">
@@ -606,20 +606,62 @@
           <input type="number" id="total" name="total" step="0.01" min="0">
         </div>
       </div>
-      <div class="form-row">
+      <div class="form-row three-col">
+        <div class="form-group">
+          <label for="taxAmount">Tax Amount</label>
+          <input type="text" id="taxAmount" name="taxAmount" readonly>
+        </div>
+        <div class="form-group">
+          <label for="expectedCheckOut">Expected Check-Out</label>
+          <input type="text" id="expectedCheckOut" name="expectedCheckOut" readonly>
+        </div>
         <div class="form-group">
           <label for="paymentType">Payment Type</label>
-          <select id="paymentType" name="paymentType">
+          <select id="paymentType" name="paymentType" onchange="toggleCardFields()">
             <option value="">Select...</option>
             <option value="Cash">Cash</option>
+            <option value="Card">Card</option>
             <option value="Credit Card">Credit Card</option>
             <option value="Debit Card">Debit Card</option>
             <option value="Check">Check</option>
             <option value="Other">Other</option>
           </select>
         </div>
+      </div>
+    </div>
+    
+    <!-- Contact & Payment Details (columns W → AA) -->
+    <div class="form-section">
+      <h3>💳 Contact &amp; Payment Details <span style="font-size:11px; color:#888; font-weight:normal;">(optional)</span></h3>
+      <div class="form-row">
         <div class="form-group">
-          <!-- Empty space for alignment -->
+          <label for="guestEmail">Guest Email <span style="font-weight:normal; color:#888;">(invoice PDF is emailed automatically)</span></label>
+          <input type="email" id="guestEmail" name="guestEmail" placeholder="guest@example.com">
+        </div>
+        <div class="form-group">
+          <label for="processor">Payment Processor</label>
+          <input type="text" id="processor" name="processor" list="processorList" placeholder="Square, Clover, Stripe, Bank...">
+          <datalist id="processorList">
+            <option value="Square"></option>
+            <option value="Clover"></option>
+            <option value="Stripe"></option>
+            <option value="Zelle"></option>
+            <option value="Bank Terminal"></option>
+          </datalist>
+        </div>
+      </div>
+      <div class="form-row three-col" id="cardDetailsRow">
+        <div class="form-group">
+          <label for="receipt">Processor Receipt #</label>
+          <input type="text" id="receipt" name="receipt" placeholder="Transaction / receipt #">
+        </div>
+        <div class="form-group">
+          <label for="last4">Card Last 4</label>
+          <input type="text" id="last4" name="last4" inputmode="numeric" maxlength="4" pattern="\d{4}" placeholder="1234">
+        </div>
+        <div class="form-group">
+          <label for="auth">Auth Code</label>
+          <input type="text" id="auth" name="auth" placeholder="Approval code">
         </div>
       </div>
     </div>
@@ -627,10 +669,14 @@
     <!-- Additional Information -->
     <div class="form-section">
       <h3>📝 Additional Information</h3>
-      <div class="form-row full">
+      <div class="form-row">
         <div class="form-group">
           <label for="deskNotes">Desk Notes</label>
-          <textarea id="deskNotes" name="deskNotes" placeholder="Any additional notes..." rows="4"></textarea>
+          <textarea id="deskNotes" name="deskNotes" placeholder="Any additional notes for the front desk..." rows="3"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="hkNotes">HK Notes</label>
+          <textarea id="hkNotes" name="hkNotes" placeholder="Notes for housekeeping (extra towels, late checkout...)" rows="3"></textarea>
         </div>
       </div>
     </div>
@@ -646,6 +692,9 @@
   </div>
   
   <script>
+    // Default tax rate (16%). Overwritten from the server's CFG.DEFAULT_TAX_RATE on load.
+    let DEFAULT_TAX_RATE = 0.16;
+    
     // Initialize form
     document.addEventListener('DOMContentLoaded', function() {
       initializeForm();
@@ -656,10 +705,63 @@
     function initializeForm() {
       const today = new Date().toISOString().split('T')[0];
       document.getElementById('date').value = today;
+      document.getElementById('taxRate').value = DEFAULT_TAX_RATE;
+      updateTaxRateLabel();
+      updateExpectedCheckOut();
+      toggleCardFields();
       
-      // Load rooms and guests
+      // Load rooms, guests and the configured tax rate
       loadRooms();
       loadGuests();
+      loadDefaultTaxRate();
+    }
+    
+    function loadDefaultTaxRate() {
+      google.script.run
+        .withSuccessHandler(function(rate) {
+          if (rate && !isNaN(rate)) {
+            DEFAULT_TAX_RATE = parseFloat(rate);
+            const input = document.getElementById('taxRate');
+            if (!input.dataset.userEdited) {
+              input.value = DEFAULT_TAX_RATE;
+              updateTaxRateLabel();
+              calculateTotals();
+            }
+          }
+        })
+        .withFailureHandler(function() { /* keep local default */ })
+        .getDefaultTaxRate();
+    }
+    
+    function currentTaxRate() {
+      const v = parseFloat(document.getElementById('taxRate').value);
+      return isNaN(v) ? DEFAULT_TAX_RATE : v;
+    }
+    
+    function updateTaxRateLabel() {
+      const pct = Math.round(currentTaxRate() * 10000) / 100;
+      document.getElementById('taxRateLabel').textContent = 'Tax Rate (' + pct + '%)';
+    }
+    
+    // Expected Check-Out = Date + nights @ 11:00 AM
+    function updateExpectedCheckOut() {
+      const dateStr = document.getElementById('date').value;
+      const nights = parseInt(document.getElementById('nights').value) || 1;
+      const out = document.getElementById('expectedCheckOut');
+      if (!dateStr) { out.value = ''; return; }
+      const d = new Date(dateStr + 'T00:00:00');
+      d.setDate(d.getDate() + nights);
+      out.value = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) + ' · 11:00 AM';
+    }
+    
+    // Show card-specific fields only for card payments
+    function toggleCardFields() {
+      const type = (document.getElementById('paymentType').value || '').toLowerCase();
+      const isCard = type.includes('card') || type.includes('credit') || type.includes('debit');
+      const row = document.getElementById('cardDetailsRow');
+      row.style.opacity = isCard || type === '' ? '1' : '0.55';
+      document.getElementById('last4').disabled = !(isCard || type === '');
+      document.getElementById('auth').disabled = !(isCard || type === '');
     }
     
     // Load available rooms
@@ -724,6 +826,12 @@
       [amountInput, nightsInput, taxRateInput].forEach(function(input) {
         input.addEventListener('input', calculateTotals);
       });
+      taxRateInput.addEventListener('input', function() {
+        this.dataset.userEdited = '1';
+        updateTaxRateLabel();
+      });
+      nightsInput.addEventListener('input', updateExpectedCheckOut);
+      document.getElementById('date').addEventListener('change', updateExpectedCheckOut);
       
       // If total is entered directly, calculate backwards
       totalInput.addEventListener('input', function() {
@@ -734,33 +842,33 @@
       });
     }
     
-    // Calculate subtotal and total
+    // Calculate subtotal, tax and total (client-side, instant; mirrors server formula)
     function calculateTotals() {
       const amount = parseFloat(document.getElementById('amount').value) || 0;
       const nights = parseInt(document.getElementById('nights').value) || 1;
-      const taxRate = parseFloat(document.getElementById('taxRate').value) || 0.13;
+      const taxRate = currentTaxRate();
       
-      google.script.run
-        .withSuccessHandler(function(result) {
-          document.getElementById('subtotal').value = '$' + result.subtotal.toFixed(2);
-          document.getElementById('total').value = result.total.toFixed(2);
-        })
-        .withFailureHandler(function(error) {
-          console.error('Calculation error:', error);
-        })
-        .calculateBookingTotals(amount, nights, taxRate);
+      const subtotal = +(amount * nights).toFixed(2);
+      const tax = +(subtotal * taxRate).toFixed(2);
+      const total = +(subtotal + tax).toFixed(2);
+      
+      document.getElementById('subtotal').value = '$' + subtotal.toFixed(2);
+      document.getElementById('taxAmount').value = '$' + tax.toFixed(2);
+      document.getElementById('total').value = total.toFixed(2);
     }
     
-    // Calculate backwards from total
+    // Calculate backwards from total (flat "total including tax" mode)
     function calculateFromTotal(total) {
       const nights = parseInt(document.getElementById('nights').value) || 1;
-      const taxRate = parseFloat(document.getElementById('taxRate').value) || 0.13;
+      const taxRate = currentTaxRate();
       
-      const subtotal = total / (1 + taxRate);
+      const subtotal = +(total / (1 + taxRate)).toFixed(2);
+      const tax = +(total - subtotal).toFixed(2);
       const amount = subtotal / nights;
       
       document.getElementById('amount').value = amount.toFixed(2);
       document.getElementById('subtotal').value = '$' + subtotal.toFixed(2);
+      document.getElementById('taxAmount').value = '$' + tax.toFixed(2);
     }
     
     // Adjust nights with +/- buttons
@@ -770,6 +878,7 @@
       const newValue = Math.max(1, currentValue + delta);
       nightsInput.value = newValue;
       calculateTotals();
+      updateExpectedCheckOut();
     }
     
     // Save booking (form submission)
@@ -828,6 +937,16 @@
         }
       }
       
+      // Optional-field sanity checks
+      const guestEmail = document.getElementById('guestEmail').value.trim();
+      if (guestEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(guestEmail)) {
+        errors.push('Guest Email does not look valid');
+      }
+      const last4 = document.getElementById('last4').value.trim();
+      if (last4 && !/^\d{4}$/.test(last4)) {
+        errors.push('Card Last 4 must be exactly 4 digits');
+      }
+      
       return errors;
     }
     
@@ -854,9 +973,9 @@
         // Calculate total if not provided
         const amount = parseFloat(document.getElementById('amount').value) || 0;
         const nights = parseInt(document.getElementById('nights').value) || 1;
-        const taxRate = parseFloat(document.getElementById('taxRate').value) || 0.13;
-        const subtotal = amount * nights;
-        totalValue = (subtotal * (1 + taxRate)).toFixed(2);
+        const taxRate = currentTaxRate();
+        const subtotal = +(amount * nights).toFixed(2);
+        totalValue = (subtotal + +(subtotal * taxRate).toFixed(2)).toFixed(2);
         document.getElementById('total').value = totalValue;
       }
       
@@ -866,10 +985,16 @@
         guest: document.getElementById('guest').value.trim(),
         amount: document.getElementById('amount').value,
         nights: document.getElementById('nights').value,
-        taxRate: document.getElementById('taxRate').value,
+        taxRate: String(currentTaxRate()),
         total: totalValue,
         paymentType: document.getElementById('paymentType').value,
         deskNotes: document.getElementById('deskNotes').value.trim(),
+        hkNotes: document.getElementById('hkNotes').value.trim(),
+        guestEmail: document.getElementById('guestEmail').value.trim(),
+        processor: document.getElementById('processor').value.trim(),
+        receipt: document.getElementById('receipt').value.trim(),
+        last4: document.getElementById('last4').value.trim(),
+        auth: document.getElementById('auth').value.trim(),
         checkIn: checkIn || document.getElementById('checkIn').checked,
         printInvoice: document.getElementById('printInvoice').checked
       };
@@ -986,8 +1111,10 @@
     // Clear form
     function clearForm() {
       document.getElementById('bookingForm').reset();
+      delete document.getElementById('taxRate').dataset.userEdited;
       initializeForm();
       document.getElementById('subtotal').value = '';
+      document.getElementById('taxAmount').value = '';
       document.getElementById('total').value = '';
       document.getElementById('invoiceOptionRow').style.display = 'none';
       hideAlert();

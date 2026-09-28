@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      padding: 12px;
+      background-color: #f5f5f5;
+      font-size: 14px;
+      overflow-y: hidden;
+      height: 100%;
+      margin: 0;
+    }
+    
+    .container {
+      max-width: 100%;
+      margin: 0 auto;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    #bookingForm {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    .form-sections-container {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 5px;
+      min-height: 0;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      position: relative;
+    }
+    
+    .header h2 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+    }
+    
+    .header p {
+      margin: 4px 0 0 0;
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    
+    .close-btn {
+      position: absolute;
+      top: 15px;
+      right: 20px;
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      color: white;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    
+    .close-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+      transform: scale(1.1);
+    }
+    
+    .form-section {
+      background: white;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      transition: box-shadow 0.2s;
+    }
+    
+    .form-section:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    }
+    
+    .form-section h3 {
+      color: #2c3e50;
+      font-size: 15px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #ecf0f1;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    
+    .form-row.full {
+      grid-template-columns: 1fr;
+    }
+    
+    .form-row.three-col {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+    
+    .form-row.five-col {
+      display: grid !important;
+      grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+      gap: 6px;
+      margin-bottom: 10px;
+      width: 100%;
+      grid-auto-flow: column;
+    }
+    
+    .form-row.five-col .form-group {
+      min-width: 0;
+      margin-bottom: 0;
+      width: 100%;
+      overflow: hidden;
+    }
+    
+    .form-row.five-col label {
+      font-size: 11px;
+      margin-bottom: 4px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: block;
+      font-weight: 500;
+    }
+    
+    .form-row.five-col input,
+    .form-row.five-col select {
+      font-size: 13px;
+      padding: 8px 10px;
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 36px;
+    }
+    
+    .form-group {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      margin-bottom: 5px;
+    }
+    
+    label.required::after {
+      content: " *";
+      color: #e74c3c;
+    }
+    
+    input[type="text"],
+    input[type="number"],
+    input[type="email"],
+    input[type="date"],
+    select,
+    textarea {
+      padding: 10px 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: all 0.2s;
+      background-color: #fff;
+      width: 100%;
+    }
+    
+    input:hover,
+    select:hover,
+    textarea:hover {
+      border-color: #b0b0b0;
+    }
+    
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: #3498db;
+      box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.15);
+      background-color: #fff;
+    }
+    
+    input[readonly] {
+      background-color: #f8f9fa;
+      color: #6c757d;
+    }
+    
+    .number-input-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .number-input-group input {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .form-row.five-col .number-input-group {
+      gap: 3px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+    }
+    
+    .form-row.five-col .number-input-group input {
+      padding: 8px 6px;
+      font-size: 13px;
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      min-height: 36px;
+    }
+    
+    .form-row.five-col .btn-number {
+      width: 28px;
+      height: 28px;
+      font-size: 14px;
+      padding: 0;
+      min-width: 28px;
+      flex-shrink: 0;
+    }
+    
+    .btn-number {
+      width: 30px;
+      height: 30px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    
+    .btn-number:hover {
+      background: #f8f9fa;
+      border-color: #3498db;
+    }
+    
+    .btn-number:active {
+      transform: scale(0.95);
+    }
+    
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .checkbox-group input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    
+    textarea {
+      resize: vertical;
+      min-height: 80px;
+      max-height: 150px;
+      font-family: inherit;
+      cursor: text;
+    }
+    
+    textarea:disabled,
+    textarea[readonly] {
+      background-color: #f8f9fa;
+      cursor: not-allowed;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+      flex-shrink: 0;
+    }
+    
+    button {
+      flex: 1;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(52, 152, 219, 0.4);
+    }
+    
+    .btn-primary:active {
+      transform: translateY(0);
+    }
+    
+    .btn-secondary {
+      background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
+      color: white;
+    }
+    
+    .btn-secondary:hover {
+      background: linear-gradient(135deg, #7f8c8d 0%, #6c7a7b 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(149, 165, 166, 0.4);
+    }
+    
+    .btn-success {
+      background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+      color: white;
+    }
+    
+    .btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(39, 174, 96, 0.4);
+    }
+    
+    .btn-success:active {
+      transform: translateY(0);
+    }
+    
+    .alert {
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      font-size: 13px;
+    }
+    
+    .alert-success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .alert-error {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .alert-info {
+      background-color: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    
+    .alert-warning {
+      background-color: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffeaa7;
+    }
+    
+    .hidden {
+      display: none;
+    }
+    
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    
+    .confirmation-page {
+      display: none;
+      text-align: center;
+      padding: 40px 20px;
+    }
+    
+    .confirmation-page.show {
+      display: block;
+    }
+    
+    .confirmation-icon {
+      font-size: 64px;
+      color: #27ae60;
+      margin-bottom: 20px;
+    }
+    
+    .confirmation-title {
+      font-size: 24px;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 10px;
+    }
+    
+    .confirmation-message {
+      font-size: 18px;
+      color: #555;
+      margin-bottom: 30px;
+      line-height: 1.6;
+    }
+    
+    .confirmation-details {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      display: inline-block;
+      min-width: 300px;
+    }
+    
+    .confirmation-details-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    
+    .confirmation-details-row:last-child {
+      border-bottom: none;
+    }
+    
+    .confirmation-details-label {
+      font-weight: 600;
+      color: #555;
+    }
+    
+    .confirmation-details-value {
+      color: #2c3e50;
+    }
+    
+    .confirmation-actions {
+      margin-top: 30px;
+    }
+    
+    .confirmation-actions button {
+      margin: 0 10px;
+      padding: 12px 30px;
+      min-width: 150px;
+    }
+    
+    #bookingForm.hide-form {
+      display: none;
+    }
+    
+    /* Responsive design */
+    @media (max-width: 1200px) {
+      .form-row.five-col {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+    
+    @media (max-width: 768px) {
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+      
+      .form-row.three-col {
+        grid-template-columns: 1fr;
+      }
+      
+      .form-row.five-col {
+        grid-template-columns: 1fr;
+      }
+      
+      .button-group {
+        flex-direction: column;
+      }
+      
+      body {
+        padding: 8px;
+      }
+      
+      .form-section {
+        padding: 10px;
+      }
+    }
+  </style>
+  </head>
+<body>
+  <div class="container">
+  <div class="header">
+    <h2>➕ New Booking Entry</h2>
+    <p>Fill in the details below to create a new booking</p>
+  </div>
+  
+  <div id="alertContainer"></div>
+  
+  <!-- Confirmation Page -->
+  <div id="confirmationPage" class="confirmation-page">
+    <div class="confirmation-icon">✅</div>
+    <div class="confirmation-title">Booking Confirmed!</div>
+    <div class="confirmation-message">Your booking has been successfully created.</div>
+    <div class="confirmation-details" id="confirmationDetails">
+      <!-- Details will be populated dynamically -->
+    </div>
+    <div class="confirmation-actions">
+      <button type="button" class="btn-primary" onclick="closeDialog()">Close</button>
+      <button type="button" class="btn-secondary" onclick="createAnotherBooking()">Create Another Booking</button>
+    </div>
+  </div>
+  
+  <form id="bookingForm">
+    <div class="form-sections-container">
+    <!-- Guest Information -->
+    <div class="form-section">
+      <h3>👤 Guest Information</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="room" class="required">Room #</label>
+          <select id="room" name="room" required>
+            <option value="">Select Room...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="date" class="required">Date</label>
+          <input type="date" id="date" name="date" required>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="guest" class="required">Guest Full Name</label>
+          <input type="text" id="guest" name="guest" list="guestList" required>
+          <datalist id="guestList"></datalist>
+        </div>
+        <div class="form-group">
+          <label for="checkIn" class="checkbox-group">
+            <input type="checkbox" id="checkIn" name="checkIn" onchange="toggleInvoiceOption()">
+            <span>Check In Now</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-row" id="invoiceOptionRow" style="display: none;">
+        <div class="form-group">
+          <label for="printInvoice" class="checkbox-group">
+            <input type="checkbox" id="printInvoice" name="printInvoice">
+            <span>🖨️ Print Invoice on Check-in</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Booking Details -->
+    <div class="form-section">
+      <h3>💰 Booking Details</h3>
+      <div class="form-row five-col">
+        <div class="form-group">
+          <label for="amount" class="required">Amount (per night)</label>
+          <input type="number" id="amount" name="amount" step="0.01" min="0" required>
+        </div>
+        <div class="form-group">
+          <label for="nights" class="required">Number of Nights</label>
+          <div class="number-input-group">
+            <button type="button" class="btn-number" onclick="adjustNights(-1)">−</button>
+            <input type="number" id="nights" name="nights" value="1" min="1" required>
+            <button type="button" class="btn-number" onclick="adjustNights(1)">+</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="taxRate">Tax Rate</label>
+          <input type="number" id="taxRate" name="taxRate" step="0.01" value="0.13" min="0" max="1">
+        </div>
+        <div class="form-group">
+          <label for="subtotal">Subtotal</label>
+          <input type="text" id="subtotal" name="subtotal" readonly>
+        </div>
+        <div class="form-group">
+          <label for="total">Total With Tax</label>
+          <input type="number" id="total" name="total" step="0.01" min="0">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="paymentType">Payment Type</label>
+          <select id="paymentType" name="paymentType">
+            <option value="">Select...</option>
+            <option value="Cash">Cash</option>
+            <option value="Credit Card">Credit Card</option>
+            <option value="Debit Card">Debit Card</option>
+            <option value="Check">Check</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <!-- Empty space for alignment -->
+        </div>
+      </div>
+    </div>
+    
+    <!-- Additional Information -->
+    <div class="form-section">
+      <h3>📝 Additional Information</h3>
+      <div class="form-row full">
+        <div class="form-group">
+          <label for="deskNotes">Desk Notes</label>
+          <textarea id="deskNotes" name="deskNotes" placeholder="Any additional notes..." rows="4"></textarea>
+        </div>
+      </div>
+    </div>
+    </div>
+    
+    <!-- Action Buttons -->
+    <div class="button-group">
+      <button type="button" class="btn-secondary" onclick="clearForm()">Clear</button>
+      <button type="submit" class="btn-primary">Save Only</button>
+      <button type="button" class="btn-success" onclick="saveAndCheckIn()">Save & Check In</button>
+    </div>
+  </form>
+  </div>
+  
+  <script>
+    // Initialize form
+    document.addEventListener('DOMContentLoaded', function() {
+      initializeForm();
+      setupAutoCalculation();
+    });
+    
+    // Set today's date as default
+    function initializeForm() {
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('date').value = today;
+      
+      // Load rooms and guests
+      loadRooms();
+      loadGuests();
+    }
+    
+    // Load available rooms
+    function loadRooms() {
+      google.script.run
+        .withSuccessHandler(function(rooms) {
+          const roomSelect = document.getElementById('room');
+          // Clear existing options except the first one
+          while (roomSelect.options.length > 1) {
+            roomSelect.remove(1);
+          }
+          
+          if (!rooms || rooms.length === 0) {
+            showAlert('No rooms found. Please check Rooms_Master sheet.', 'error');
+            return;
+          }
+          
+          rooms.forEach(function(room) {
+            if (room && room.number) {
+              const option = document.createElement('option');
+              option.value = room.number;
+              option.textContent = `Room ${room.number}${room.status !== 'Available' ? ' (' + room.status + ')' : ''}`;
+              if (room.status !== 'Available') {
+                option.disabled = true;
+              }
+              roomSelect.appendChild(option);
+            }
+          });
+        })
+        .withFailureHandler(function(error) {
+          showAlert('Error loading rooms: ' + (error.message || error), 'error');
+          console.error('Room loading error:', error);
+        })
+        .getAvailableRoomsForForm();
+    }
+    
+    // Load recent guests for autocomplete
+    function loadGuests() {
+      google.script.run
+        .withSuccessHandler(function(guests) {
+          const guestList = document.getElementById('guestList');
+          guests.forEach(function(guest) {
+            const option = document.createElement('option');
+            option.value = guest;
+            guestList.appendChild(option);
+          });
+        })
+        .withFailureHandler(function(error) {
+          // Silently fail - autocomplete is optional
+        })
+        .getRecentGuests();
+    }
+    
+    // Setup auto-calculation
+    function setupAutoCalculation() {
+      const amountInput = document.getElementById('amount');
+      const nightsInput = document.getElementById('nights');
+      const taxRateInput = document.getElementById('taxRate');
+      const totalInput = document.getElementById('total');
+      
+      // Calculate when amount, nights, or tax rate changes
+      [amountInput, nightsInput, taxRateInput].forEach(function(input) {
+        input.addEventListener('input', calculateTotals);
+      });
+      
+      // If total is entered directly, calculate backwards
+      totalInput.addEventListener('input', function() {
+        const total = parseFloat(this.value);
+        if (total && !isNaN(total)) {
+          calculateFromTotal(total);
+        }
+      });
+    }
+    
+    // Calculate subtotal and total
+    function calculateTotals() {
+      const amount = parseFloat(document.getElementById('amount').value) || 0;
+      const nights = parseInt(document.getElementById('nights').value) || 1;
+      const taxRate = parseFloat(document.getElementById('taxRate').value) || 0.13;
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          document.getElementById('subtotal').value = '$' + result.subtotal.toFixed(2);
+          document.getElementById('total').value = result.total.toFixed(2);
+        })
+        .withFailureHandler(function(error) {
+          console.error('Calculation error:', error);
+        })
+        .calculateBookingTotals(amount, nights, taxRate);
+    }
+    
+    // Calculate backwards from total
+    function calculateFromTotal(total) {
+      const nights = parseInt(document.getElementById('nights').value) || 1;
+      const taxRate = parseFloat(document.getElementById('taxRate').value) || 0.13;
+      
+      const subtotal = total / (1 + taxRate);
+      const amount = subtotal / nights;
+      
+      document.getElementById('amount').value = amount.toFixed(2);
+      document.getElementById('subtotal').value = '$' + subtotal.toFixed(2);
+    }
+    
+    // Adjust nights with +/- buttons
+    function adjustNights(delta) {
+      const nightsInput = document.getElementById('nights');
+      const currentValue = parseInt(nightsInput.value) || 1;
+      const newValue = Math.max(1, currentValue + delta);
+      nightsInput.value = newValue;
+      calculateTotals();
+    }
+    
+    // Save booking (form submission)
+    document.getElementById('bookingForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      saveBooking(false);
+    });
+    
+    // Save and check in
+    function saveAndCheckIn() {
+      document.getElementById('checkIn').checked = true;
+      saveBooking(true);
+    }
+    
+    // Validate form before saving
+    function validateForm(checkIn) {
+      const errors = [];
+      
+      // Required fields
+      const room = document.getElementById('room').value;
+      const date = document.getElementById('date').value;
+      const guest = document.getElementById('guest').value.trim();
+      const amount = parseFloat(document.getElementById('amount').value);
+      const nights = parseInt(document.getElementById('nights').value);
+      const total = parseFloat(document.getElementById('total').value);
+      
+      if (!room || room === '') {
+        errors.push('Please select a Room #');
+      }
+      
+      if (!date) {
+        errors.push('Please select a Date');
+      }
+      
+      if (!guest || guest.length < 2) {
+        errors.push('Please enter Guest Full Name (at least 2 characters)');
+      }
+      
+      if (!amount || amount <= 0) {
+        errors.push('Please enter a valid Amount (per night) greater than 0');
+      }
+      
+      if (!nights || nights < 1) {
+        errors.push('Please enter Number of Nights (at least 1)');
+      }
+      
+      if (!total || total <= 0) {
+        errors.push('Please enter Total With Tax (or let it calculate automatically)');
+      }
+      
+      // Additional validation for check-in
+      if (checkIn) {
+        const paymentType = document.getElementById('paymentType').value;
+        if (!paymentType || paymentType === '') {
+          errors.push('Payment Type is required when checking in');
+        }
+      }
+      
+      return errors;
+    }
+    
+    // Save booking to sheet
+    function saveBooking(checkIn) {
+      const form = document.getElementById('bookingForm');
+      
+      // Basic HTML5 validation
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+      
+      // Custom validation
+      const validationErrors = validateForm(checkIn);
+      if (validationErrors.length > 0) {
+        showAlert('Please fix the following errors:\n• ' + validationErrors.join('\n• '), 'error');
+        return;
+      }
+      
+      // Ensure total is calculated if empty
+      let totalValue = document.getElementById('total').value;
+      if (!totalValue || parseFloat(totalValue) <= 0) {
+        // Calculate total if not provided
+        const amount = parseFloat(document.getElementById('amount').value) || 0;
+        const nights = parseInt(document.getElementById('nights').value) || 1;
+        const taxRate = parseFloat(document.getElementById('taxRate').value) || 0.13;
+        const subtotal = amount * nights;
+        totalValue = (subtotal * (1 + taxRate)).toFixed(2);
+        document.getElementById('total').value = totalValue;
+      }
+      
+      const formData = {
+        date: document.getElementById('date').value,
+        room: document.getElementById('room').value,
+        guest: document.getElementById('guest').value.trim(),
+        amount: document.getElementById('amount').value,
+        nights: document.getElementById('nights').value,
+        taxRate: document.getElementById('taxRate').value,
+        total: totalValue,
+        paymentType: document.getElementById('paymentType').value,
+        deskNotes: document.getElementById('deskNotes').value.trim(),
+        checkIn: checkIn || document.getElementById('checkIn').checked,
+        printInvoice: document.getElementById('printInvoice').checked
+      };
+      
+      // Show loading state
+      form.classList.add('loading');
+      
+      // Log form data for debugging
+      console.log('Saving booking with data:', formData);
+      
+      google.script.run
+        .withSuccessHandler(function(result) {
+          form.classList.remove('loading');
+          console.log('Save result:', result);
+          if (result.success) {
+            // Show confirmation page instead of alert
+            showConfirmationPage(result);
+            
+            // If invoice was generated, open it for printing (but don't steal focus)
+            if (result.invoiceGenerated && result.invoiceUrl) {
+              // Store current focus to restore it later
+              const activeElement = document.activeElement;
+              
+              // Open invoice PDF in new window for printing
+              setTimeout(function() {
+                // Use Google Drive viewer URL for proper PDF display
+                let printUrl = result.invoiceUrl;
+                
+                // Convert Google Drive file URL to viewer URL for proper PDF rendering
+                if (printUrl.includes('drive.google.com/file/d/')) {
+                  const fileId = printUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+                  if (fileId && fileId[1]) {
+                    // Use the viewer URL - this properly displays PDF content
+                    printUrl = 'https://drive.google.com/file/d/' + fileId[1] + '/view';
+                  }
+                } else if (printUrl.includes('/view')) {
+                  // Already a viewer URL, use as is
+                  printUrl = printUrl;
+                } else {
+                  // Try to extract file ID from any Google Drive URL format
+                  const fileIdMatch = printUrl.match(/[\/=]([a-zA-Z0-9_-]{25,})/);
+                  if (fileIdMatch && fileIdMatch[1]) {
+                    printUrl = 'https://drive.google.com/file/d/' + fileIdMatch[1] + '/view';
+                  }
+                }
+                
+                console.log('Opening invoice PDF:', printUrl);
+                
+                // Open PDF in new window
+                const printWindow = window.open(printUrl, '_blank', 'width=900,height=700');
+                if (printWindow) {
+                  // Restore focus to the form immediately
+                  if (activeElement && typeof activeElement.focus === 'function') {
+                    activeElement.focus();
+                  }
+                  
+                  // Show message to user
+                  showAlert('Invoice PDF opened in new tab. Wait for it to load, then use Ctrl+P / Cmd+P to print.', 'info');
+                  
+                  // Wait longer for PDF to fully load before attempting print
+                  setTimeout(function() {
+                    try {
+                      if (printWindow && !printWindow.closed) {
+                        printWindow.focus();
+                        // Additional delay to ensure PDF viewer has fully rendered
+                        setTimeout(function() {
+                          try {
+                            printWindow.print();
+                            console.log('Print dialog triggered');
+                          } catch (printError) {
+                            console.log('Print dialog not available:', printError);
+                            showAlert('PDF opened. Please wait for it to load, then use Ctrl+P / Cmd+P in the new tab to print.', 'info');
+                          }
+                        }, 3000); // Wait 3 more seconds for PDF to render
+                      }
+                    } catch (e) {
+                      console.log('Error accessing print window:', e);
+                      showAlert('PDF opened. Please wait for it to load, then use Ctrl+P / Cmd+P in the new tab to print.', 'info');
+                    }
+                  }, 4000); // Wait 4 seconds for PDF to start loading
+                } else {
+                  showAlert('⚠️ Pop-up blocked. Please allow pop-ups. Invoice URL: ' + result.invoiceUrl, 'error');
+                }
+              }, 500); // Small delay to allow form processing
+            }
+            
+            // Don't clear form or close - show confirmation page instead
+          } else {
+            showAlert(result.message, 'error');
+          }
+        })
+        .withFailureHandler(function(error) {
+          form.classList.remove('loading');
+          const errorMsg = error.message || error.toString() || 'Unknown error';
+          showAlert('Error saving booking: ' + errorMsg, 'error');
+          console.error('Save error:', error);
+          console.error('Form data was:', formData);
+        })
+        .saveNewBooking(formData);
+    }
+    
+    // Toggle invoice option visibility
+    function toggleInvoiceOption() {
+      const checkInBox = document.getElementById('checkIn');
+      const invoiceOptionRow = document.getElementById('invoiceOptionRow');
+      if (checkInBox.checked) {
+        invoiceOptionRow.style.display = 'flex';
+      } else {
+        invoiceOptionRow.style.display = 'none';
+        document.getElementById('printInvoice').checked = false;
+      }
+    }
+    
+    // Clear form
+    function clearForm() {
+      document.getElementById('bookingForm').reset();
+      initializeForm();
+      document.getElementById('subtotal').value = '';
+      document.getElementById('total').value = '';
+      document.getElementById('invoiceOptionRow').style.display = 'none';
+      hideAlert();
+    }
+    
+    // Show alert message
+    function showAlert(message, type) {
+      const container = document.getElementById('alertContainer');
+      const alert = document.createElement('div');
+      alert.className = 'alert alert-' + type;
+      alert.textContent = message;
+      container.innerHTML = '';
+      container.appendChild(alert);
+      
+      // Auto-hide success messages
+      if (type === 'success') {
+        setTimeout(hideAlert, 5000);
+      }
+    }
+    
+    // Hide alert
+    function hideAlert() {
+      document.getElementById('alertContainer').innerHTML = '';
+    }
+    
+    // Show confirmation page
+    function showConfirmationPage(result) {
+      const form = document.getElementById('bookingForm');
+      const confirmationPage = document.getElementById('confirmationPage');
+      const detailsContainer = document.getElementById('confirmationDetails');
+      
+      // Hide the form
+      form.classList.add('hide-form');
+      
+      // Build confirmation details
+      const room = result.room || 'N/A';
+      const guest = result.guest || 'N/A';
+      const row = result.row || 'N/A';
+      
+      let detailsHTML = `
+        <div class="confirmation-details-row">
+          <span class="confirmation-details-label">Room #:</span>
+          <span class="confirmation-details-value"><strong>${room}</strong></span>
+        </div>
+        <div class="confirmation-details-row">
+          <span class="confirmation-details-label">Guest:</span>
+          <span class="confirmation-details-value">${guest}</span>
+        </div>
+        <div class="confirmation-details-row">
+          <span class="confirmation-details-label">Row:</span>
+          <span class="confirmation-details-value">${row}</span>
+        </div>
+      `;
+      
+      if (result.invoiceGenerated && result.invoiceNo) {
+        detailsHTML += `
+        <div class="confirmation-details-row">
+          <span class="confirmation-details-label">Invoice #:</span>
+          <span class="confirmation-details-value">${result.invoiceNo}</span>
+        </div>
+        `;
+      }
+      
+      detailsContainer.innerHTML = detailsHTML;
+      
+      // Show confirmation page
+      confirmationPage.classList.add('show');
+    }
+    
+    // Close dialog
+    function closeDialog() {
+      google.script.host.close();
+    }
+    
+    // Create another booking
+    function createAnotherBooking() {
+      const form = document.getElementById('bookingForm');
+      const confirmationPage = document.getElementById('confirmationPage');
+      
+      // Hide confirmation page
+      confirmationPage.classList.remove('show');
+      
+      // Show form again
+      form.classList.remove('hide-form');
+      
+      // Clear form
+      clearForm();
+      
+      // Focus on first field
+      document.getElementById('room').focus();
+    }
+  </script>
+</body>
+</html>
+
